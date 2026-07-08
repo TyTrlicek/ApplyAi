@@ -1,0 +1,28 @@
+# Runtime deps for the vendored JobSpy scrapers (backend/vendor/jobspy)
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+pandas>=2.1.0
+numpy>=1.26.0
+pydantic>=2.3.0
+tls-client>=1.0.1
+markdownify>=1.1.0
+regex>=2024.4.28
+
+# Persistence
+SQLAlchemy>=2.0.0
+psycopg[binary]>=3.1.0   # Postgres/Supabase driver (not needed for local SQLite)
+python-dotenv>=1.0.0     # load DATABASE_URL from backend/.env
+
+# API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+
+# AI
+anthropic>=0.40.0
+
+# Document export
+python-docx>=1.1.0
+
+# Test
+pytest>=8.0.0
+pillow
