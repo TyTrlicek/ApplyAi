@@ -79,13 +79,20 @@ export default function AnalyticsPage() {
   const statusCounts = {
     need_to_apply: jobs.filter((j) => j.status === "need_to_apply").length,
     applied: jobs.filter((j) => j.status === "applied").length,
-    decided_not: jobs.filter((j) => j.status === "decided_not").length,
+    chose_not_to_apply: jobs.filter((j) => j.status === "chose_not_to_apply").length,
+    interviewing: jobs.filter((j) => j.status === "interviewing").length,
+    rejected_pre: jobs.filter((j) => j.status === "rejected_pre").length,
+    rejected_post: jobs.filter((j) => j.status === "rejected_post").length,
+    stale_pre: jobs.filter((j) => j.status === "stale_pre").length,
+    stale_post: jobs.filter((j) => j.status === "stale_post").length,
+    ghosted: jobs.filter((j) => j.status === "ghosted").length,
   };
 
   const funnelData = [
     { name: "Total", value: jobs.length, fill: CHART_COLORS[0] },
     { name: "Need to Apply", value: statusCounts.need_to_apply, fill: CHART_COLORS[1] },
     { name: "Applied", value: statusCounts.applied, fill: CHART_COLORS[2] },
+    { name: "Interviewing", value: statusCounts.interviewing, fill: CHART_COLORS[3] },
   ].filter((d) => d.value > 0);
 
   const sourceData = Object.entries(
@@ -110,7 +117,13 @@ export default function AnalyticsPage() {
   const statusPie = [
     { name: "Need to Apply", value: statusCounts.need_to_apply },
     { name: "Applied", value: statusCounts.applied },
-    { name: "Not Applying", value: statusCounts.decided_not },
+    { name: "Interviewing", value: statusCounts.interviewing },
+    { name: "Chose Not to Apply", value: statusCounts.chose_not_to_apply },
+    { name: "Rejected (Pre)", value: statusCounts.rejected_pre },
+    { name: "Rejected (Post)", value: statusCounts.rejected_post },
+    { name: "Stale (Pre)", value: statusCounts.stale_pre },
+    { name: "Stale (Post)", value: statusCounts.stale_post },
+    { name: "Ghosted", value: statusCounts.ghosted },
   ].filter((d) => d.value > 0);
 
   const salaryData = jobs

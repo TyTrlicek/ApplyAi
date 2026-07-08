@@ -34,12 +34,19 @@ import { api } from "@/lib/api";
 import type { Job, JobStatus } from "@/lib/types";
 import { formatDate, formatSalary } from "@/lib/format";
 import { isKnownCompany } from "@/lib/known-companies";
+import { isTargeted } from "@/lib/company-lists";
 
 const STATUS_OPTIONS: { value: JobStatus | "all"; label: string }[] = [
-  { value: "all", label: "All statuses" },
-  { value: "need_to_apply", label: "Need to Apply" },
-  { value: "decided_not", label: "Not Applying" },
-  { value: "applied", label: "Applied" },
+  { value: "all",              label: "All statuses" },
+  { value: "need_to_apply",    label: "Need to Apply" },
+  { value: "applied",          label: "Applied" },
+  { value: "chose_not_to_apply", label: "Chose Not to Apply" },
+  { value: "interviewing",     label: "Interviewing" },
+  { value: "rejected_pre",     label: "Rejected (Pre-Interview)" },
+  { value: "rejected_post",    label: "Rejected (Post-Interview)" },
+  { value: "stale_pre",        label: "Stale (Pre-Interview)" },
+  { value: "stale_post",       label: "Stale (Post-Interview)" },
+  { value: "ghosted",          label: "Ghosted" },
 ];
 
 const SOURCE_OPTIONS = [
@@ -57,11 +64,15 @@ export default function DiscoverPage() {
   const [sourceFilter, setSourceFilter] = useState("all");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [knownOnly, setKnownOnly] = useState(false);
+  const [targetsOnly, setTargetsOnly] = useState(false);
+  const [targetedCompanies, setTargetedCompanies] = useState<string[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const displayedJobs = knownOnly ? jobs.filter((j) => isKnownCompany(j.company?.name)) : jobs;
+  const displayedJobs = jobs
+    .filter((j) => !knownOnly || isKnownCompany(j.company?.name))
+    .filter((j) => !targetsOnly || isTargeted(j.company?.name, targetedCompanies));
 
   const load = useCallback(
     async (searchTerm = search, status = statusFilter, source = sourceFilter) => {
@@ -84,6 +95,7 @@ export default function DiscoverPage() {
 
   useEffect(() => {
     load("", "all", "all");
+    api.profile.get().then((p) => setTargetedCompanies(p.targetedCompanies ?? []));
   }, []);
 
   function handleSearchChange(val: string) {
@@ -147,7 +159,7 @@ export default function DiscoverPage() {
         <header className="flex h-14 items-center justify-between border-b border-border px-4 md:px-6">
           <h1 className="text-sm font-semibold text-foreground">Discover</h1>
           <span className="text-xs text-muted-foreground">
-            {loading ? "Loading…" : `${displayedJobs.length} jobs`}
+            {loading ? "Loading…" : `${displayedJobs.length}${displayedJobs.length !== jobs.length ? ` of ${jobs.length}` : ""} jobs`}
           </span>
         </header>
 
@@ -211,6 +223,24 @@ export default function DiscoverPage() {
             Known Co.
           </button>
 
+          <button
+            onClick={() => setTargetsOnly((v) => !v)}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+              targetsOnly
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border bg-background text-muted-foreground hover:text-foreground"
+            }`}
+            title="Show only your targeted companies"
+          >
+            <Building2 className="h-3.5 w-3.5" />
+            Targets
+            {targetedCompanies.length > 0 && (
+              <span className={`ml-0.5 ${targetsOnly ? "text-primary/70" : "text-muted-foreground"}`}>
+                {targetedCompanies.length}
+              </span>
+            )}
+          </button>
+
           {/* Bulk actions */}
           {selected.size > 0 && (
             <div className="ml-auto flex items-center gap-2">
@@ -223,24 +253,15 @@ export default function DiscoverPage() {
                   <ChevronDown className="h-3.5 w-3.5" />
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    className="text-xs"
-                    onClick={() => bulkUpdateStatus("need_to_apply")}
-                  >
-                    Need to Apply
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="text-xs"
-                    onClick={() => bulkUpdateStatus("decided_not")}
-                  >
-                    Not Applying
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="text-xs"
-                    onClick={() => bulkUpdateStatus("applied")}
-                  >
-                    Applied
-                  </DropdownMenuItem>
+                  {STATUS_OPTIONS.filter((o) => o.value !== "all").map((o) => (
+                    <DropdownMenuItem
+                      key={o.value}
+                      className="text-xs"
+                      onClick={() => bulkUpdateStatus(o.value as JobStatus)}
+                    >
+                      {o.label}
+                    </DropdownMenuItem>
+                  ))}
                 </DropdownMenuContent>
               </DropdownMenu>
               <Button
@@ -368,24 +389,15 @@ export default function DiscoverPage() {
                             <ChevronDown className="h-3 w-3 text-muted-foreground" />
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="start">
-                            <DropdownMenuItem
-                              className="text-xs"
-                              onClick={() => handleStatusChange(job.id, "need_to_apply")}
-                            >
-                              Need to Apply
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-xs"
-                              onClick={() => handleStatusChange(job.id, "decided_not")}
-                            >
-                              Not Applying
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-xs"
-                              onClick={() => handleStatusChange(job.id, "applied")}
-                            >
-                              Applied
-                            </DropdownMenuItem>
+                            {STATUS_OPTIONS.filter((o) => o.value !== "all").map((o) => (
+                              <DropdownMenuItem
+                                key={o.value}
+                                className="text-xs"
+                                onClick={() => handleStatusChange(job.id, o.value as JobStatus)}
+                              >
+                                {o.label}
+                              </DropdownMenuItem>
+                            ))}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>

@@ -47,8 +47,14 @@ class Profile(Base):
 
 class JobStatus(str, enum.Enum):
     NEED_TO_APPLY = "need_to_apply"
-    DECIDED_NOT = "decided_not"
     APPLIED = "applied"
+    CHOSE_NOT_TO_APPLY = "chose_not_to_apply"
+    INTERVIEWING = "interviewing"
+    REJECTED_PRE = "rejected_pre"
+    REJECTED_POST = "rejected_post"
+    STALE_PRE = "stale_pre"
+    STALE_POST = "stale_post"
+    GHOSTED = "ghosted"
 
 
 class SearchProfile(Base):

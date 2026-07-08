@@ -1,4 +1,13 @@
-export type JobStatus = "need_to_apply" | "decided_not" | "applied";
+export type JobStatus =
+  | "need_to_apply"
+  | "applied"
+  | "chose_not_to_apply"
+  | "interviewing"
+  | "rejected_pre"
+  | "rejected_post"
+  | "stale_pre"
+  | "stale_post"
+  | "ghosted";
 
 export type WorkStyle = "in-office" | "hybrid" | "remote";
 
@@ -73,6 +82,7 @@ export interface MapProfile {
     salaryMin: string;
     workStyle: WorkStyle;
   };
+  targetedCompanies?: string[];
 }
 
 export interface Company {

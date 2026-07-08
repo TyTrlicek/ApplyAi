@@ -103,8 +103,14 @@ export function JobDetailSheet({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="need_to_apply">Need to Apply</SelectItem>
-                  <SelectItem value="decided_not">Not Applying</SelectItem>
                   <SelectItem value="applied">Applied</SelectItem>
+                  <SelectItem value="chose_not_to_apply">Chose Not to Apply</SelectItem>
+                  <SelectItem value="interviewing">Interviewing</SelectItem>
+                  <SelectItem value="rejected_pre">Rejected (Pre-Interview)</SelectItem>
+                  <SelectItem value="rejected_post">Rejected (Post-Interview)</SelectItem>
+                  <SelectItem value="stale_pre">Stale (Pre-Interview)</SelectItem>
+                  <SelectItem value="stale_post">Stale (Post-Interview)</SelectItem>
+                  <SelectItem value="ghosted">Ghosted</SelectItem>
                 </SelectContent>
               </Select>
 

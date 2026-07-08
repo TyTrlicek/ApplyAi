@@ -82,11 +82,33 @@ class NormalizedJob:
 # disguised as engineering roles, staffing farms with mass multi-location spam, etc.
 # Normalized (lowercase, alphanumeric + spaces only) for robust matching.
 COMPANY_BLOCKLIST: frozenset[str] = frozenset({
+    # Gig / annotation farms
     "dataannotation",
     "beaconfire inc",
     "beaconfire",
     "jbs international inc",
     "jbs international",
+    # Indian IT staffing / body shops
+    "tata consultancy services",
+    "tcs",
+    "emonics llc",
+    "emonics",
+    "inherent technologies",
+    "intone networks",
+    "capgemini",
+    "osi engineering",
+    "atc",
+    "entarian",
+    "wipro",
+    # Job board aggregators posting as companies
+    "jack jill",
+    "sundayy",
+    "fetchjobs co",
+    "fetchjobs",
+    "jobright ai",
+    "jobright",
+    "smart apply test company",
+    "hibu",
 })
 
 # Title noise terms excluded regardless of seniority. Whole-word matched.
@@ -96,7 +118,13 @@ COMPANY_BLOCKLIST: frozenset[str] = frozenset({
 DEFAULT_NOISE_EXCLUDE = (
     "trainer",
     "cleared",
+    "clearance",
     "secret",
+    "embedded",
+    "mobile",
+    "high side",
+    "seta",
+    "space systems",
 )
 
 # Senior-signal terms excluded from results on ALL sources (exclusion-based, not
@@ -154,10 +182,14 @@ def is_noise_title(title: str | None, terms: tuple[str, ...] | list[str] | None 
 
 
 def is_blocked_company(company: str | None) -> bool:
-    """True if the company is on the blocklist (normalized, case-insensitive)."""
+    """True if the company is on the blocklist (normalized, case-insensitive).
+
+    Uses substring matching so that e.g. "Tata Consultancy Services (TCS)"
+    matches the blocklist entry "tata consultancy services"."""
     if not company:
         return False
-    return _norm(company) in COMPANY_BLOCKLIST
+    normed = _norm(company)
+    return any(entry in normed for entry in COMPANY_BLOCKLIST)
 
 
 def _norm(value: str | None) -> str:
