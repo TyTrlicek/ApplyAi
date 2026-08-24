@@ -83,6 +83,11 @@ export interface MapProfile {
     workStyle: WorkStyle;
   };
   targetedCompanies?: string[];
+  resumeFile?: {
+    filename: string;
+    path: string;
+    uploadedAt: string;
+  };
 }
 
 export interface Company {
@@ -185,6 +190,19 @@ export interface GenerateCoverLetterResponse {
   applicant_name: string;
 }
 
+export interface FormAnswersResponse {
+  answers: string[];
+}
+
+export interface SchedulerStatus {
+  active: boolean;
+  hour: number;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_status: "success" | "error" | null;
+  last_run_summary: { total_inserted?: number; total_updated?: number; error?: string } | null;
+}
+
 export interface FetchResult {
   profile: string;
   inserted: number;
@@ -200,4 +218,29 @@ export interface FetchResponse {
   results: FetchResult[];
   total_inserted: number;
   total_updated: number;
+}
+
+export type ApplySessionStatus =
+  | "idle"
+  | "starting"
+  | "running"
+  | "waiting_for_login"
+  | "waiting_for_review"
+  | "submitted"
+  | "error"
+  | "cancelled";
+
+export interface ApplyFilledField {
+  field: string;
+  value: string;
+  ai_generated: boolean;
+}
+
+export interface ApplyStatusResponse {
+  status: ApplySessionStatus;
+  step: string | null;
+  filled_fields: ApplyFilledField[];
+  error: string | null;
+  pid: number | null;
+  started_at: string | null;
 }

@@ -32,3 +32,4 @@ def _normalize(url: str) -> str:
 
 DATABASE_URL = _normalize(os.environ.get("DATABASE_URL", "sqlite:///./applyai.db"))
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+FETCH_SCHEDULE_HOUR = int(os.environ.get("FETCH_SCHEDULE_HOUR", "7"))

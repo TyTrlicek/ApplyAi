@@ -116,6 +116,15 @@ class Job(Base):
 
     cached_resume: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
     cached_cover_letter: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)
+    form_answers: Mapped[list | None] = mapped_column(JSON, nullable=True, default=None)
+
+    # "uploaded" (default) -> apply step uses the profile's uploaded resume file directly.
+    # "ai_generated" -> set the moment /jobs/{id}/resume is called for this job; apply step
+    # renders cached_resume to DOCX as before. See playwright_worker/runner.py.
+    resume_source: Mapped[str] = mapped_column(String(16), default="uploaded")
+
+    application_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    application_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     status: Mapped[JobStatus] = mapped_column(
         Enum(JobStatus, native_enum=False, length=32),

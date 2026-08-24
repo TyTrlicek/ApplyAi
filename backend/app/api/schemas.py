@@ -45,6 +45,17 @@ class JobStatusUpdate(BaseModel):
     status: JobStatus
 
 
+class JobCapture(BaseModel):
+    """A single job captured ad hoc (e.g. from the LinkedIn extension), as
+    opposed to a batch from the scheduled fetch pipeline."""
+
+    title: str
+    company: str | None = None
+    location: str | None = None
+    url: str | None = None
+    description: str | None = None
+
+
 class SearchProfileOut(BaseModel):
     id: int
     name: str

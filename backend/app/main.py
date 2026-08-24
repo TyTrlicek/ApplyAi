@@ -9,10 +9,13 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import scheduler as sched
+from app.api.routes.apply import router as apply_router
 from app.api.routes.fetch import router as fetch_router
 from app.api.routes.generate import router as generate_router
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.profile import router as profile_router
+from app.api.routes.scheduler_route import router as scheduler_router
 from app.api.routes.searches import router as searches_router
 from app.db.session import init_db
 
@@ -30,6 +33,12 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     init_db()
+    sched.start()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    sched.stop()
 
 
 app.include_router(jobs_router)
@@ -37,6 +46,8 @@ app.include_router(searches_router)
 app.include_router(fetch_router)
 app.include_router(profile_router)
 app.include_router(generate_router)
+app.include_router(scheduler_router)
+app.include_router(apply_router)
 
 
 @app.get("/health")

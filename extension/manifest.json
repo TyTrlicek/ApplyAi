@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "ApplyAi for LinkedIn",
+  "version": "0.1.0",
+  "description": "Trigger the ApplyAi pipeline (resume, cover letter, Easy Apply automation) directly from a LinkedIn job posting.",
+  "permissions": ["scripting", "storage"],
+  "host_permissions": ["http://localhost:8000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/jobs/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ApplyAi"
+  }
+}

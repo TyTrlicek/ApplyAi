@@ -1,10 +1,13 @@
 import type {
+  ApplyStatusResponse,
   FetchResponse,
+  FormAnswersResponse,
   GenerateCoverLetterResponse,
   GenerateResumeResponse,
   Job,
   JobStatus,
   MapProfile,
+  SchedulerStatus,
   SearchProfile,
 } from "./types";
 
@@ -67,6 +70,11 @@ export const api = {
       apiFetch<GenerateCoverLetterResponse>(`/jobs/${jobId}/cover-letter${refresh ? "?refresh=true" : ""}`, { method: "POST" }),
     resumeDocxUrl: (jobId: number) => `${API_BASE}/jobs/${jobId}/resume.docx`,
     coverLetterDocxUrl: (jobId: number) => `${API_BASE}/jobs/${jobId}/cover-letter.docx`,
+    formAnswers: (jobId: number, questions: string[]) =>
+      apiFetch<FormAnswersResponse>(`/jobs/${jobId}/form-answers`, {
+        method: "POST",
+        body: JSON.stringify({ questions }),
+      }),
   },
   profile: {
     get: () => apiFetch<MapProfile>("/profile/"),
@@ -75,6 +83,25 @@ export const api = {
         method: "PUT",
         body: JSON.stringify({ data: profile }),
       }),
+    uploadResume: async (file: File) => {
+      const form = new FormData();
+      form.append("file", file);
+      // No Content-Type header here — the browser sets the multipart boundary
+      // itself, which is why this doesn't go through apiFetch().
+      const res = await fetch(`${API_BASE}/profile/resume`, { method: "POST", body: form });
+      if (!res.ok) throw new Error(`API ${res.status}: /profile/resume`);
+      return res.json() as Promise<MapProfile>;
+    },
+  },
+  scheduler: {
+    status: () => apiFetch<SchedulerStatus>("/scheduler/status"),
+  },
+  apply: {
+    start: (jobId: number) => apiFetch<{ status: string; pid: number }>(`/jobs/${jobId}/apply`, { method: "POST" }),
+    status: (jobId: number) => apiFetch<ApplyStatusResponse>(`/jobs/${jobId}/apply-status`),
+    continue: (jobId: number) => apiFetch<{ ok: boolean }>(`/jobs/${jobId}/apply-continue`, { method: "POST" }),
+    submit: (jobId: number) => apiFetch<{ ok: boolean }>(`/jobs/${jobId}/apply-submit`, { method: "POST" }),
+    cancel: (jobId: number) => apiFetch<{ ok: boolean }>(`/jobs/${jobId}/apply`, { method: "DELETE" }),
   },
   health: () => apiFetch<{ status: string }>("/health"),
 };

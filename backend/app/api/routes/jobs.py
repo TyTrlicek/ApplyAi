@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.schemas import JobOut, JobStatusUpdate
+from app.api.schemas import JobCapture, JobOut, JobStatusUpdate
 from app.db.models import Job, JobStatus
+from app.db.repository import upsert_job
 from app.db.session import get_session
+from app.sources.base import NormalizedJob
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -42,6 +44,31 @@ def list_jobs(
 
     q = q.offset(offset).limit(limit)
     return session.scalars(q).all()
+
+
+@router.post("/capture", response_model=JobOut)
+def capture_job(body: JobCapture, session: Session = Depends(_db)):
+    """Capture a single job ad hoc (e.g. from the LinkedIn extension). Upserts
+    on the same dedup_key the scheduled fetch pipeline uses, so a job already
+    found by the daily scraper is updated in place rather than duplicated."""
+    normalized = NormalizedJob(
+        source="linkedin_extension",
+        source_id=None,
+        title=body.title,
+        company=body.company,
+        location=body.location,
+        url=body.url,
+        apply_url=body.url,
+        description=body.description,
+    )
+    upsert_job(session, normalized)
+    session.flush()
+    job = session.scalar(
+        select(Job)
+        .options(selectinload(Job.company))
+        .where(Job.dedup_key == normalized.dedup_key)
+    )
+    return job
 
 
 @router.get("/{job_id}", response_model=JobOut)

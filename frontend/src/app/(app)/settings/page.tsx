@@ -8,12 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
-import type { SearchProfile } from "@/lib/types";
+import type { SchedulerStatus, SearchProfile } from "@/lib/types";
 
 export default function SettingsPage() {
   const [profiles, setProfiles] = useState<SearchProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [apiHealthy, setApiHealthy] = useState<boolean | null>(null);
+  const [schedulerStatus, setSchedulerStatus] = useState<SchedulerStatus | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -21,6 +22,7 @@ export default function SettingsPage() {
       api.health()
         .then(() => setApiHealthy(true))
         .catch(() => setApiHealthy(false)),
+      api.scheduler.status().then(setSchedulerStatus).catch(() => null),
     ]).finally(() => setLoading(false));
   }, []);
 
@@ -163,20 +165,50 @@ export default function SettingsPage() {
             Scheduler
           </h2>
           <Card>
-            <CardContent className="flex items-center gap-3 py-4">
-              <RefreshCw className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <p className="text-sm text-foreground">
-                  Automatic daily fetch
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Scheduled auto-fetch is coming in a future release. Use the
-                  "Fetch Jobs" button on the Dashboard in the meantime.
-                </p>
-              </div>
-              <Badge variant="secondary" className="ml-auto shrink-0 text-xs">
-                Coming Soon
-              </Badge>
+            <CardContent className="flex items-start gap-3 py-4">
+              <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              {loading || !schedulerStatus ? (
+                <div className="flex-1 space-y-1.5">
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-3 w-64" />
+                </div>
+              ) : (
+                <div className="flex-1 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm text-foreground">Daily fetch at {schedulerStatus.hour}:00</p>
+                    <Badge
+                      variant="outline"
+                      className={schedulerStatus.active
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs"
+                        : "text-xs text-muted-foreground"}
+                    >
+                      {schedulerStatus.active ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+                  {schedulerStatus.next_run_at && (
+                    <p className="text-xs text-muted-foreground">
+                      Next run: {new Date(schedulerStatus.next_run_at).toLocaleString()}
+                    </p>
+                  )}
+                  {schedulerStatus.last_run_at && (
+                    <p className="text-xs text-muted-foreground">
+                      Last run: {new Date(schedulerStatus.last_run_at).toLocaleString()}
+                      {schedulerStatus.last_run_status === "success" && schedulerStatus.last_run_summary && (
+                        <span className="ml-1 text-emerald-400">
+                          — {schedulerStatus.last_run_summary.total_inserted} inserted,{" "}
+                          {schedulerStatus.last_run_summary.total_updated} updated
+                        </span>
+                      )}
+                      {schedulerStatus.last_run_status === "error" && (
+                        <span className="ml-1 text-destructive">— failed</span>
+                      )}
+                    </p>
+                  )}
+                  {!schedulerStatus.last_run_at && (
+                    <p className="text-xs text-muted-foreground">No runs yet this session.</p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
         </section>

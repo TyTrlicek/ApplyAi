@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Plus, Trash2, Upload } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,11 +38,14 @@ const DEFAULT_PROFILE: MapProfile = {
 };
 
 type SaveState = "idle" | "saving" | "saved" | "error";
+type ResumeUploadState = "idle" | "uploading" | "error";
 
 export default function ProfilePage() {
   const [profile, setProfile] = useState<MapProfile>(DEFAULT_PROFILE);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [loading, setLoading] = useState(true);
+  const [resumeUploadState, setResumeUploadState] = useState<ResumeUploadState>("idle");
+  const resumeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.profile.get().then((data) => {
@@ -136,6 +139,18 @@ export default function ProfilePage() {
     }));
   }
 
+  async function handleResumeUpload(file: File) {
+    setResumeUploadState("uploading");
+    try {
+      const data = await api.profile.uploadResume(file);
+      setProfile((p) => ({ ...p, resumeFile: data.resumeFile }));
+      setResumeUploadState("idle");
+    } catch {
+      setResumeUploadState("error");
+      setTimeout(() => setResumeUploadState("idle"), 3000);
+    }
+  }
+
   async function handleSave() {
     setSaveState("saving");
     try {
@@ -167,6 +182,59 @@ export default function ProfilePage() {
         </header>
 
         <div className="space-y-8 p-4 md:p-6">
+
+          {/* Default Resume */}
+          <section>
+            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Default Resume
+            </h2>
+            <p className="mb-3 text-xs text-muted-foreground/70">
+              Used for every application by default — no AI generation, no per-job cost. Tailor a resume with AI for a specific job instead from that job&apos;s Prepare page.
+            </p>
+            <Card className="flex items-center justify-between p-4">
+              <div className="text-sm">
+                {profile.resumeFile ? (
+                  <>
+                    <p className="font-medium text-foreground">{profile.resumeFile.filename}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Uploaded {new Date(profile.resumeFile.uploadedAt).toLocaleDateString()}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-muted-foreground">No resume uploaded yet.</p>
+                )}
+              </div>
+              <input
+                ref={resumeInputRef}
+                type="file"
+                accept=".pdf,.docx"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleResumeUpload(file);
+                  e.target.value = "";
+                }}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5 text-xs"
+                disabled={resumeUploadState === "uploading"}
+                onClick={() => resumeInputRef.current?.click()}
+              >
+                <Upload className="h-3.5 w-3.5" />
+                {resumeUploadState === "uploading"
+                  ? "Uploading…"
+                  : resumeUploadState === "error"
+                  ? "Error — try again"
+                  : profile.resumeFile
+                  ? "Replace"
+                  : "Upload"}
+              </Button>
+            </Card>
+          </section>
+
+          <Separator />
 
           {/* Bio / Brain Dump */}
           <section>

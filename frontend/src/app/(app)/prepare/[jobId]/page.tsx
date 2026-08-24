@@ -2,12 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Download, Loader2, Printer, RefreshCw } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Download, Loader2, Printer, RefreshCw, Send, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, downloadDocx } from "@/lib/api";
-import type { GenerateCoverLetterResponse, GenerateResumeResponse, Job } from "@/lib/types";
+import type { ApplyFilledField, ApplySessionStatus, ApplyStatusResponse, FormAnswersResponse, GenerateCoverLetterResponse, GenerateResumeResponse, Job } from "@/lib/types";
 import { formatSalary } from "@/lib/format";
 
 // ─── Resume HTML renderer ────────────────────────────────────────────────────
@@ -244,6 +244,24 @@ export default function PreparePage() {
   const [clState, setClState] = useState<GenState>("idle");
   const [clData, setClData] = useState<GenerateCoverLetterResponse | null>(null);
 
+  const [faState, setFaState] = useState<GenState>("idle");
+  const [faQuestions, setFaQuestions] = useState("");
+  const [faData, setFaData] = useState<FormAnswersResponse | null>(null);
+
+  // ── Apply session state ────────────────────────────────────────────────────
+  const [applyStatus, setApplyStatus] = useState<ApplyStatusResponse | null>(null);
+  const applyPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const applySessionStatus: ApplySessionStatus = applyStatus?.status ?? "idle";
+  const isApplying = applySessionStatus !== "idle" && applySessionStatus !== "submitted"
+    && applySessionStatus !== "error" && applySessionStatus !== "cancelled";
+
+  function isAutoApplySupported(job: Job | null): boolean {
+    if (!job) return false;
+    const url = (job.apply_url || job.url || "").toLowerCase();
+    return job.source === "linkedin" || url.includes("myworkdayjobs.com") || url.includes("workday.com");
+  }
+
   useEffect(() => {
     api.jobs.get(id).then((j) => {
       setJob(j);
@@ -257,6 +275,50 @@ export default function PreparePage() {
       }
     }).finally(() => setJobLoading(false));
   }, [id]);
+
+  // Poll apply status while a session is active
+  useEffect(() => {
+    const activeStatuses: ApplySessionStatus[] = ["starting", "running", "waiting_for_login", "waiting_for_review"];
+    if (applyStatus && activeStatuses.includes(applyStatus.status)) {
+      applyPollRef.current = setInterval(async () => {
+        try {
+          const s = await api.apply.status(id);
+          setApplyStatus(s);
+          if (!activeStatuses.includes(s.status)) {
+            clearInterval(applyPollRef.current!);
+          }
+        } catch {
+          // keep polling
+        }
+      }, 2000);
+    }
+    return () => {
+      if (applyPollRef.current) clearInterval(applyPollRef.current);
+    };
+  }, [applyStatus?.status, id]);
+
+  async function startApply() {
+    try {
+      await api.apply.start(id);
+      // Kick off polling immediately
+      setApplyStatus({ status: "starting", step: null, filled_fields: [], error: null, pid: null, started_at: null });
+    } catch (e: any) {
+      alert(e?.message ?? "Failed to start apply session");
+    }
+  }
+
+  async function submitApply() {
+    await api.apply.submit(id);
+  }
+
+  async function continueApply() {
+    await api.apply.continue(id);
+  }
+
+  async function cancelApply() {
+    await api.apply.cancel(id);
+    setApplyStatus(null);
+  }
 
   async function generateResume(refresh = false) {
     setResumeState("loading");
@@ -277,6 +339,25 @@ export default function PreparePage() {
       setClState("done");
     } catch {
       setClState("error");
+    }
+  }
+
+  function parseQuestions(text: string): string[] {
+    const byParagraph = text.split(/\n\n+/).map((q) => q.trim()).filter(Boolean);
+    if (byParagraph.length > 1) return byParagraph;
+    return text.split(/\n/).map((q) => q.trim()).filter(Boolean);
+  }
+
+  async function generateFormAnswers() {
+    const questions = parseQuestions(faQuestions);
+    if (!questions.length) return;
+    setFaState("loading");
+    try {
+      const data = await api.generate.formAnswers(id, questions);
+      setFaData(data);
+      setFaState("done");
+    } catch {
+      setFaState("error");
     }
   }
 
@@ -332,6 +413,35 @@ export default function PreparePage() {
             {job?.title ?? "Job"}{job?.company ? ` — ${job.company.name}` : ""}
           </span>
         )}
+
+        {/* Auto-Apply button — LinkedIn Easy Apply + Workday */}
+        {isAutoApplySupported(job) && resumeState === "done" && !isApplying && applySessionStatus === "idle" && (
+          <Button
+            size="sm"
+            className="ml-auto h-7 gap-1.5 text-xs"
+            onClick={startApply}
+          >
+            <Send className="h-3.5 w-3.5" />
+            Auto-Apply
+          </Button>
+        )}
+        {isApplying && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-auto h-7 gap-1.5 text-xs text-destructive"
+            onClick={cancelApply}
+          >
+            <X className="h-3.5 w-3.5" />
+            Cancel Apply
+          </Button>
+        )}
+        {applySessionStatus === "submitted" && (
+          <span className="ml-auto flex items-center gap-1.5 text-xs text-green-500">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Applied
+          </span>
+        )}
       </header>
 
       <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-4 md:flex-row md:overflow-hidden md:p-6">
@@ -384,13 +494,27 @@ export default function PreparePage() {
           )}
         </div>
 
-        {/* Right: generate tabs */}
+        {/* Right: apply panel or generate tabs */}
         <div className="flex flex-1 flex-col overflow-hidden">
+          {/* Apply flow overlay — replaces tabs while a session is active */}
+          {applyStatus && applySessionStatus !== "idle" && (
+            <ApplyPanel
+              status={applyStatus}
+              onContinue={continueApply}
+              onSubmit={submitApply}
+              onCancel={cancelApply}
+              onDismiss={() => setApplyStatus(null)}
+            />
+          )}
+
+          {/* Normal tabs — hidden while apply session is active */}
+          {(!applyStatus || applySessionStatus === "idle") && (
           <Tabs defaultValue="resume" className="flex flex-1 flex-col overflow-hidden">
             <div className="flex items-center justify-between pb-3">
               <TabsList className="h-8">
                 <TabsTrigger value="resume" className="h-7 text-xs">Resume</TabsTrigger>
                 <TabsTrigger value="cover-letter" className="h-7 text-xs">Cover Letter</TabsTrigger>
+                <TabsTrigger value="form-answers" className="h-7 text-xs">Form Answers</TabsTrigger>
               </TabsList>
             </div>
 
@@ -521,9 +645,220 @@ export default function PreparePage() {
                 )}
               </div>
             </TabsContent>
+
+            {/* Form answers tab */}
+            <TabsContent value="form-answers" className="flex flex-1 flex-col overflow-hidden data-hidden:hidden">
+              <div className="flex shrink-0 flex-col gap-2 pb-3">
+                <textarea
+                  className="min-h-[120px] w-full resize-y rounded-md border border-border bg-muted/20 px-3 py-2 text-xs leading-relaxed text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-1 focus:ring-ring"
+                  placeholder={"Paste application questions here — one per line, or separated by blank lines.\n\nWhy do you want to work here?\n\nDescribe a time you solved a complex technical problem."}
+                  value={faQuestions}
+                  onChange={(e) => {
+                    setFaQuestions(e.target.value);
+                    if (faState !== "idle") { setFaState("idle"); setFaData(null); }
+                  }}
+                />
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    className="h-7 gap-1.5 text-xs"
+                    onClick={generateFormAnswers}
+                    disabled={faState === "loading" || !faQuestions.trim()}
+                  >
+                    {faState === "loading" ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    {faState === "loading" ? "Drafting…" : faState === "done" ? "Re-draft" : "Draft Answers"}
+                  </Button>
+                  {faState === "error" && (
+                    <span className="text-xs text-destructive">Generation failed — try again</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto rounded-md border border-border bg-muted/20">
+                {faState === "idle" && (
+                  <div className="flex h-full items-center justify-center">
+                    <p className="text-sm text-muted-foreground">Paste questions above and click Draft Answers.</p>
+                  </div>
+                )}
+                {faState === "loading" && (
+                  <div className="flex h-full items-center justify-center gap-2">
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Claude is drafting your answers…</p>
+                  </div>
+                )}
+                {faState === "done" && faData && (
+                  <div className="divide-y divide-border">
+                    {parseQuestions(faQuestions).map((q, i) => (
+                      <div key={i} className="px-4 py-3">
+                        <p className="mb-1.5 text-xs font-medium text-muted-foreground">{q}</p>
+                        <p className="text-sm leading-relaxed text-foreground">
+                          {faData.answers[i] ?? "—"}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </TabsContent>
           </Tabs>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Apply panel ──────────────────────────────────────────────────────────────
+
+function ApplyPanel({
+  status,
+  onContinue,
+  onSubmit,
+  onCancel,
+  onDismiss,
+}: {
+  status: ApplyStatusResponse;
+  onContinue: () => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  onDismiss: () => void;
+}) {
+  const s = status.status;
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden rounded-md border border-border">
+      {/* Panel header */}
+      <div className="flex items-center justify-between border-b border-border px-4 py-2">
+        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          {s === "starting" && "Launching browser…"}
+          {s === "running" && `Auto-filling — ${status.step ?? "working"}`}
+          {s === "waiting_for_login" && "Login required"}
+          {s === "waiting_for_review" && "Review & Submit"}
+          {s === "submitted" && "Application submitted"}
+          {s === "error" && "Apply failed"}
+          {s === "cancelled" && "Cancelled"}
+        </span>
+        {(s === "submitted" || s === "error" || s === "cancelled") && (
+          <button onClick={onDismiss} className="text-muted-foreground hover:text-foreground">
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Loading / running */}
+      {(s === "starting" || s === "running") && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">
+            {s === "starting"
+              ? "Opening browser…"
+              : "Filling in your application. Watch the browser window."}
+          </p>
+          {status.filled_fields.length > 0 && (
+            <p className="text-xs text-muted-foreground/60">
+              {status.filled_fields.length} field{status.filled_fields.length !== 1 ? "s" : ""} filled so far
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Manual login required (first time on this Workday portal) */}
+      {s === "waiting_for_login" && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8">
+          <p className="text-sm font-medium text-foreground">Log in to this portal</p>
+          <p className="max-w-sm text-center text-xs text-muted-foreground">
+            This is your first visit to this portal. Log in or create an account in the
+            browser window — or click "Sign in with LinkedIn" if available. Your session
+            will be saved for future applications.
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button size="sm" className="h-7 text-xs" onClick={onContinue}>
+              I'm logged in — Continue
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Review & Submit */}
+      {s === "waiting_for_review" && (
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto">
+            {status.filled_fields.length === 0 ? (
+              <div className="flex h-full items-center justify-center">
+                <p className="text-sm text-muted-foreground">No fields recorded.</p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {status.filled_fields.map((f, i) => (
+                  <FilledFieldRow key={i} field={f} />
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2 border-t border-border px-4 py-3">
+            <p className="flex-1 text-xs text-muted-foreground">
+              Review the browser window. Click <strong>Submit</strong> to send the application.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="h-7 gap-1.5 text-xs"
+              onClick={onSubmit}
+            >
+              <Send className="h-3.5 w-3.5" />
+              Submit Application
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Success */}
+      {s === "submitted" && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8">
+          <CheckCircle2 className="h-8 w-8 text-green-500" />
+          <p className="text-sm font-medium text-foreground">Application submitted</p>
+          <p className="text-xs text-muted-foreground">Job status updated to Applied.</p>
+        </div>
+      )}
+
+      {/* Error */}
+      {(s === "error" || s === "cancelled") && (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8">
+          <p className="text-sm text-destructive">
+            {s === "cancelled" ? "Apply session cancelled." : status.error ?? "An error occurred."}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilledFieldRow({ field }: { field: ApplyFilledField }) {
+  return (
+    <div className={`px-4 py-3 ${field.ai_generated ? "border-l-2 border-amber-500/60" : ""}`}>
+      <div className="flex items-center gap-2">
+        <p className="text-xs font-medium text-muted-foreground">{field.field}</p>
+        {field.ai_generated && (
+          <span className="rounded bg-amber-500/10 px-1 py-px text-[10px] font-medium text-amber-500">
+            AI
+          </span>
+        )}
+      </div>
+      <p className="mt-0.5 text-sm text-foreground">{field.value}</p>
     </div>
   );
 }

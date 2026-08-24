@@ -10,6 +10,7 @@ from pathlib import Path
 import anthropic
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.config import ANTHROPIC_API_KEY
@@ -402,6 +403,7 @@ Description:
         job_row = session.scalar(select(Job).where(Job.id == job_id))
         if job_row is not None:
             job_row.cached_resume = result
+            job_row.resume_source = "ai_generated"
 
     return result
 
@@ -462,6 +464,83 @@ Description:
             job_row.cached_cover_letter = result
 
     return result
+
+
+FORM_ANSWERS_SYSTEM = """You are an expert job application assistant. Draft concise, specific answers to short-answer application questions for the applicant.
+
+Guidelines:
+- Answer each question in first person
+- Use only facts from the applicant's profile — never invent details, metrics, or experiences
+- Each answer should be 3–5 sentences, direct and specific
+- Match the question's implied tone: behavioral (STAR-style), technical (concrete details), motivational (genuine interest)
+- No hollow filler phrases ("I am passionate about...", "I am a team player", "I am excited to...")
+- Return ONLY a JSON array of answer strings, one per question, in the same order as the input, no markdown, no explanation"""
+
+FORM_ANSWERS_MAX_TOKENS = 4096
+
+
+class FormAnswersRequest(BaseModel):
+    questions: list[str]
+
+
+@router.post("/{job_id}/form-answers")
+def generate_form_answers(job_id: int, body: FormAnswersRequest):
+    if not body.questions:
+        raise HTTPException(status_code=400, detail="No questions provided")
+
+    with get_session() as session:
+        job = session.scalar(select(Job).where(Job.id == job_id))
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        profile = get_profile(session)
+        job_data = {
+            "title": job.title,
+            "company": job.company.name if job.company else None,
+            "location": job.location,
+            "description": _cap_description(job.description),
+        }
+
+    if not profile:
+        raise HTTPException(status_code=400, detail="Profile is empty — fill it in first")
+
+    questions_block = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(body.questions))
+
+    user_message = _build_profile_block(profile) + f"""
+
+===== JOB =====
+Title: {job_data['title']}
+Company: {job_data['company']}
+Location: {job_data['location']}
+Description:
+{job_data['description'] or 'No description provided.'}
+
+===== APPLICATION QUESTIONS =====
+{questions_block}"""
+
+    client = _client()
+    message = client.messages.create(
+        model=MODEL,
+        max_tokens=FORM_ANSWERS_MAX_TOKENS,
+        system=[{"type": "text", "text": FORM_ANSWERS_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user_message}],
+    )
+
+    _log_usage("form_answers", job_id, message)
+
+    raw = next(b.text for b in message.content if b.type == "text").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        answers = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Claude returned invalid JSON: {e}")
+
+    if not isinstance(answers, list):
+        raise HTTPException(status_code=500, detail="Claude returned unexpected response format")
+
+    return {"answers": answers}
 
 
 def _slug(value: str | None) -> str:
