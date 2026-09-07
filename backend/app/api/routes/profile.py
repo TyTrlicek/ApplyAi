@@ -5,15 +5,21 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.db.repository import get_profile, upsert_profile
 from app.db.session import get_session
+from app.profile_autofill import build_autofill_profile
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
 UPLOAD_DIR = Path.home() / ".applyai" / "uploads"
 _ALLOWED_EXTENSIONS = {".pdf", ".docx"}
+_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+}
 
 
 class ProfileBody(BaseModel):
@@ -32,6 +38,33 @@ def read_profile():
 def write_profile(body: ProfileBody):
     with get_session() as session:
         return upsert_profile(session, body.data)
+
+
+@router.get("/autofill")
+def read_autofill_profile():
+    """Flattened, fill-ready projection of the MAP for the autofill extension."""
+    with get_session() as session:
+        profile = get_profile(session)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile is empty — fill it in first")
+    return build_autofill_profile(profile)
+
+
+@router.get("/resume.file")
+def download_default_resume():
+    """The uploaded default resume, streamed for the autofill file-upload step."""
+    with get_session() as session:
+        profile = get_profile(session)
+    resume_file = (profile or {}).get("resumeFile") or {}
+    path = Path(resume_file.get("path", ""))
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="No default resume uploaded — add one on the Profile page")
+    ext = path.suffix.lower()
+    return FileResponse(
+        path,
+        media_type=_CONTENT_TYPES.get(ext, "application/octet-stream"),
+        filename=resume_file.get("filename") or path.name,
+    )
 
 
 @router.post("/resume")

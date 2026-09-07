@@ -330,7 +330,7 @@ def _cap_description(text: str | None) -> str:
     return text[:MAX_DESCRIPTION_CHARS] + "\n\n[...description truncated to bound token usage...]"
 
 
-def _log_usage(kind: str, job_id: int, message: anthropic.types.Message) -> None:
+def _log_usage(kind: str, job_id: int | None, message: anthropic.types.Message) -> None:
     """Log token usage + estimated cost for one generation."""
     u = message.usage
     cost = u.input_tokens * _INPUT_PRICE + u.output_tokens * _OUTPUT_PRICE
@@ -479,8 +479,61 @@ Guidelines:
 FORM_ANSWERS_MAX_TOKENS = 4096
 
 
+class JobContext(BaseModel):
+    title: str | None = None
+    company: str | None = None
+    location: str | None = None
+    description: str | None = None
+
+
 class FormAnswersRequest(BaseModel):
     questions: list[str]
+
+
+class StandaloneFormAnswersRequest(BaseModel):
+    questions: list[str]
+    job: JobContext | None = None
+
+
+def _draft_form_answers(profile: dict, job_data: dict, questions: list[str], log_job_id) -> list[str]:
+    """Shared core: MAP + job context + questions -> list of answer strings."""
+    questions_block = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(questions))
+
+    user_message = _build_profile_block(profile) + f"""
+
+===== JOB =====
+Title: {job_data.get('title')}
+Company: {job_data.get('company')}
+Location: {job_data.get('location')}
+Description:
+{job_data.get('description') or 'No description provided.'}
+
+===== APPLICATION QUESTIONS =====
+{questions_block}"""
+
+    client = _client()
+    message = client.messages.create(
+        model=MODEL,
+        max_tokens=FORM_ANSWERS_MAX_TOKENS,
+        system=[{"type": "text", "text": FORM_ANSWERS_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user_message}],
+    )
+
+    _log_usage("form_answers", log_job_id, message)
+
+    raw = next(b.text for b in message.content if b.type == "text").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+    try:
+        answers = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Claude returned invalid JSON: {e}")
+
+    if not isinstance(answers, list):
+        raise HTTPException(status_code=500, detail="Claude returned unexpected response format")
+
+    return answers
 
 
 @router.post("/{job_id}/form-answers")
@@ -504,43 +557,32 @@ def generate_form_answers(job_id: int, body: FormAnswersRequest):
     if not profile:
         raise HTTPException(status_code=400, detail="Profile is empty — fill it in first")
 
-    questions_block = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(body.questions))
+    return {"answers": _draft_form_answers(profile, job_data, body.questions, job_id)}
 
-    user_message = _build_profile_block(profile) + f"""
 
-===== JOB =====
-Title: {job_data['title']}
-Company: {job_data['company']}
-Location: {job_data['location']}
-Description:
-{job_data['description'] or 'No description provided.'}
+# Standalone router (no /jobs prefix) — the autofill extension asks for answers
+# before the job exists in the DB (jobs are captured only on submit, decision 3).
+answers_router = APIRouter(tags=["generate"])
 
-===== APPLICATION QUESTIONS =====
-{questions_block}"""
 
-    client = _client()
-    message = client.messages.create(
-        model=MODEL,
-        max_tokens=FORM_ANSWERS_MAX_TOKENS,
-        system=[{"type": "text", "text": FORM_ANSWERS_SYSTEM, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": user_message}],
-    )
+@answers_router.post("/form-answers")
+def draft_form_answers(body: StandaloneFormAnswersRequest):
+    if not body.questions:
+        raise HTTPException(status_code=400, detail="No questions provided")
 
-    _log_usage("form_answers", job_id, message)
+    with get_session() as session:
+        profile = get_profile(session)
+    if not profile:
+        raise HTTPException(status_code=400, detail="Profile is empty — fill it in first")
 
-    raw = next(b.text for b in message.content if b.type == "text").strip()
-    if raw.startswith("```"):
-        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-    try:
-        answers = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Claude returned invalid JSON: {e}")
-
-    if not isinstance(answers, list):
-        raise HTTPException(status_code=500, detail="Claude returned unexpected response format")
-
-    return {"answers": answers}
+    ctx = body.job or JobContext()
+    job_data = {
+        "title": ctx.title,
+        "company": ctx.company,
+        "location": ctx.location,
+        "description": _cap_description(ctx.description),
+    }
+    return {"answers": _draft_form_answers(profile, job_data, body.questions, None)}
 
 
 def _slug(value: str | None) -> str:

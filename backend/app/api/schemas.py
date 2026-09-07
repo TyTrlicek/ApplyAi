@@ -53,7 +53,11 @@ class JobCapture(BaseModel):
     company: str | None = None
     location: str | None = None
     url: str | None = None
+    apply_url: str | None = None
     description: str | None = None
+    # Set by the autofill extension when it captures a job on submit-detection.
+    form_answers: list[dict] | None = None
+    mark_applied: bool = False
 
 
 class SearchProfileOut(BaseModel):

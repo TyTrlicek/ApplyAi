@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -58,7 +60,7 @@ def capture_job(body: JobCapture, session: Session = Depends(_db)):
         company=body.company,
         location=body.location,
         url=body.url,
-        apply_url=body.url,
+        apply_url=body.apply_url or body.url,
         description=body.description,
     )
     upsert_job(session, normalized)
@@ -68,6 +70,13 @@ def capture_job(body: JobCapture, session: Session = Depends(_db)):
         .options(selectinload(Job.company))
         .where(Job.dedup_key == normalized.dedup_key)
     )
+
+    if body.form_answers:
+        job.form_answers = body.form_answers
+    if body.mark_applied:
+        job.status = JobStatus.APPLIED
+        job.application_submitted_at = datetime.now(timezone.utc)
+    session.flush()
     return job
 
 

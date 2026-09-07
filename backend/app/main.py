@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import scheduler as sched
 from app.api.routes.apply import router as apply_router
 from app.api.routes.fetch import router as fetch_router
+from app.api.routes.generate import answers_router
 from app.api.routes.generate import router as generate_router
 from app.api.routes.jobs import router as jobs_router
 from app.api.routes.profile import router as profile_router
@@ -46,6 +47,7 @@ app.include_router(searches_router)
 app.include_router(fetch_router)
 app.include_router(profile_router)
 app.include_router(generate_router)
+app.include_router(answers_router)
 app.include_router(scheduler_router)
 app.include_router(apply_router)
 
