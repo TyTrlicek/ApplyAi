@@ -66,6 +66,59 @@ function scrapeDescription() {
   return "";
 }
 
+// A lot of LinkedIn postings — many of them Workday-backed — aren't Easy
+// Apply: LinkedIn's real Apply button just hands off to the employer's own
+// site. We need that destination URL (not the LinkedIn posting URL) for the
+// backend to detect the portal (Workday/Greenhouse/Lever) and drive it.
+function findRealApplyButton() {
+  // .jobs-apply-button is LinkedIn's own class — same one playwright_worker's
+  // LinkedIn handler targets. Excludes our own widget button (different id).
+  return document.querySelector("button.jobs-apply-button, a.jobs-apply-button");
+}
+
+function detectApplyMode() {
+  const btn = findRealApplyButton();
+  if (!btn) return "unknown"; // e.g. not logged in — button may be hidden/absent
+  return /easy apply/i.test(btn.innerText || "") ? "easy_apply" : "external";
+}
+
+// LinkedIn's "Apply on company website" link is a real <a href>, wrapped in a
+// safety redirect: linkedin.com/safety/go/?url=<encoded-destination>. When
+// present this is a synchronous, reliable read — no click or new-tab watch
+// needed. Confirmed present on every external-apply posting sampled (Ashby,
+// Greenhouse, Workday, Workable, and others) as of 2026-08-25.
+function extractStaticApplyUrl() {
+  const btn = findRealApplyButton();
+  const href = btn?.getAttribute("href");
+  if (!href) return null;
+  try {
+    const u = new URL(href, location.href);
+    if (u.hostname.includes("linkedin.com")) {
+      const target = u.searchParams.get("url");
+      return target || null;
+    }
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+// Clicks LinkedIn's real Apply button and waits for the background watcher to
+// report where the browser ended up. Only meaningful for "external" mode —
+// the click there opens (or navigates to) the employer's application page
+// rather than LinkedIn's own Easy Apply modal.
+async function detectExternalApplyUrl() {
+  const btn = findRealApplyButton();
+  if (!btn) throw new Error("Could not find LinkedIn's Apply button");
+
+  await chrome.runtime.sendMessage({ type: "ARM_EXTERNAL_APPLY_WATCH" });
+  btn.click();
+
+  const result = await chrome.runtime.sendMessage({ type: "AWAIT_EXTERNAL_APPLY_URL" });
+  if (result.error) throw new Error(result.error);
+  return result.url;
+}
+
 function buildWidget() {
   const root = document.createElement("div");
   root.id = "applyai-widget";
@@ -91,9 +144,13 @@ function buildWidget() {
       <button id="applyai-close" style="background:none; border:none; color:#999; cursor:pointer; font-size:14px;">×</button>
     </div>
     <div id="applyai-job-summary" style="margin-bottom:8px; color:#b0b0b0;"></div>
+    <div id="applyai-apply-mode" style="margin-bottom:8px; font-size:12px; color:#8a8f98;"></div>
     <textarea id="applyai-description" rows="4"
       style="width:100%; box-sizing:border-box; background:#111; color:#ddd; border:1px solid #333; border-radius:6px; padding:6px; margin-bottom:8px; font-size:12px; resize:vertical;"
       placeholder="Job description (auto-scraped where possible — edit if it's missing or wrong)"></textarea>
+    <input id="applyai-manual-url" type="text"
+      style="width:100%; box-sizing:border-box; background:#111; color:#ddd; border:1px solid #333; border-radius:6px; padding:6px; margin-bottom:8px; font-size:12px;"
+      placeholder="Application page URL (only needed if auto-detect fails)" />
     <label style="display:flex; align-items:center; gap:6px; margin-bottom:8px; color:#b0b0b0; cursor:pointer;">
       <input type="checkbox" id="applyai-tailor" />
       ✨ Tailor resume with AI for this job
@@ -101,6 +158,10 @@ function buildWidget() {
     <button id="applyai-apply-btn"
       style="width:100%; padding:8px; background:#4f46e5; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:600;">
       Apply with ApplyAI
+    </button>
+    <button id="applyai-track-btn"
+      style="width:100%; margin-top:6px; padding:6px; background:transparent; color:#8a8f98; border:1px solid #333; border-radius:6px; cursor:pointer; font-size:12px;">
+      Applying manually — just log it
     </button>
     <div id="applyai-status" style="margin-top:8px; color:#999; min-height:16px;"></div>
   `;
@@ -113,6 +174,7 @@ function buildWidget() {
   });
 
   root.querySelector("#applyai-apply-btn").addEventListener("click", onApplyClick);
+  root.querySelector("#applyai-track-btn").addEventListener("click", onTrackClick);
 
   return root;
 }
@@ -126,10 +188,68 @@ function setStatus(text, isError) {
 
 let currentUrl = null;
 
-function onApplyClick() {
+async function onApplyClick() {
+  const applyBtn = widgetEl.querySelector("#applyai-apply-btn");
+  applyBtn.disabled = true;
+
   const fields = scrapeJobFields();
   const description = widgetEl.querySelector("#applyai-description").value;
   const tailorWithAI = widgetEl.querySelector("#applyai-tailor").checked;
+  const manualUrl = widgetEl.querySelector("#applyai-manual-url").value.trim();
+
+  let applyUrl = currentUrl; // default: Easy Apply happens on this same LinkedIn page
+  if (manualUrl) {
+    applyUrl = manualUrl;
+  } else {
+    const mode = detectApplyMode();
+    if (mode === "external") {
+      const staticUrl = extractStaticApplyUrl();
+      if (staticUrl) {
+        applyUrl = staticUrl;
+        setStatus(`Captured application link (${new URL(staticUrl).hostname})`);
+      } else {
+        try {
+          setStatus("Off-platform application detected — opening the employer's page…");
+          applyUrl = await detectExternalApplyUrl();
+          setStatus(`Captured application link (${new URL(applyUrl).hostname})`);
+        } catch (err) {
+          setStatus(`${err.message} — paste the application URL above and try again`, true);
+          applyBtn.disabled = false;
+          return;
+        }
+      }
+    } else if (mode === "unknown") {
+      setStatus("Couldn't find LinkedIn's Apply button (are you signed in?) — paste the application URL above", true);
+      applyBtn.disabled = false;
+      return;
+    }
+  }
+
+  const payload = {
+    title: fields?.jobTitle || document.title,
+    company: fields?.company || null,
+    location: fields?.location || null,
+    url: currentUrl,
+    apply_url: applyUrl,
+    description,
+  };
+
+  setStatus("Sending…");
+
+  chrome.runtime.sendMessage({ type: "CAPTURE_JOB", payload, tailorWithAI }, () => {
+    // Real progress arrives via STATUS_UPDATE messages below; this callback
+    // only confirms the background worker received the request.
+  });
+}
+
+// For jobs you'd rather apply to by hand — logs the job into the dashboard
+// already marked Applied, skipping resume generation, cover letter, and the
+// Playwright automation entirely.
+function onTrackClick() {
+  const applyBtn = widgetEl.querySelector("#applyai-apply-btn");
+  const trackBtn = widgetEl.querySelector("#applyai-track-btn");
+  const fields = scrapeJobFields();
+  const description = widgetEl.querySelector("#applyai-description").value;
 
   const payload = {
     title: fields?.jobTitle || document.title,
@@ -139,10 +259,11 @@ function onApplyClick() {
     description,
   };
 
-  widgetEl.querySelector("#applyai-apply-btn").disabled = true;
-  setStatus("Sending…");
+  applyBtn.disabled = true;
+  trackBtn.disabled = true;
+  setStatus("Logging…");
 
-  chrome.runtime.sendMessage({ type: "CAPTURE_JOB", payload, tailorWithAI }, () => {
+  chrome.runtime.sendMessage({ type: "TRACK_APPLIED", payload }, () => {
     // Real progress arrives via STATUS_UPDATE messages below; this callback
     // only confirms the background worker received the request.
   });
@@ -169,13 +290,37 @@ function refreshWidgetForCurrentJob() {
 
   widgetEl.querySelector("#applyai-job-summary").textContent = `${fields.jobTitle} — ${fields.company}`;
   widgetEl.querySelector("#applyai-description").value = scrapeDescription();
+  widgetEl.querySelector("#applyai-manual-url").value = "";
   widgetEl.querySelector("#applyai-apply-btn").disabled = false;
+  widgetEl.querySelector("#applyai-track-btn").disabled = false;
+
+  const modeEl = widgetEl.querySelector("#applyai-apply-mode");
+  const mode = detectApplyMode();
+  modeEl.textContent = {
+    easy_apply: "Easy Apply on LinkedIn",
+    external: "Off-platform application — link will be auto-detected on click",
+    unknown: "Apply button not found — sign in, or paste the application URL below",
+  }[mode];
+
   setStatus(fields.source === "title" ? "Description not auto-detected on this page — paste it above" : "");
 }
 
 function checkForJobChange() {
   const signal = document.querySelector(BEM.title)?.innerText || document.title;
-  if (signal === lastSignal) return;
+  if (signal === lastSignal) {
+    // Same job, but LinkedIn's Apply button can render in after the title —
+    // keep the mode indicator honest without a full re-scrape.
+    const modeEl = widgetEl?.querySelector("#applyai-apply-mode");
+    if (modeEl && findRealApplyButton()) {
+      const mode = detectApplyMode();
+      modeEl.textContent = {
+        easy_apply: "Easy Apply on LinkedIn",
+        external: "Off-platform application — link will be auto-detected on click",
+        unknown: "Apply button not found — sign in, or paste the application URL below",
+      }[mode];
+    }
+    return;
+  }
   lastSignal = signal;
   refreshWidgetForCurrentJob();
 }
@@ -183,10 +328,12 @@ function checkForJobChange() {
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type !== "STATUS_UPDATE") return;
   setStatus(message.message, message.status === "error");
-  if (["submitted", "cancelled", "error"].includes(message.status)) {
+  if (["submitted", "cancelled", "error", "tracked"].includes(message.status)) {
     setTimeout(() => {
-      const btn = widgetEl?.querySelector("#applyai-apply-btn");
-      if (btn) btn.disabled = false;
+      const applyBtn = widgetEl?.querySelector("#applyai-apply-btn");
+      const trackBtn = widgetEl?.querySelector("#applyai-track-btn");
+      if (applyBtn) applyBtn.disabled = false;
+      if (trackBtn) trackBtn.disabled = false;
     }, 1000);
   }
 });
