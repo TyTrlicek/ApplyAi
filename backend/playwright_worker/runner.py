@@ -28,6 +28,8 @@ from app.db.models import Job, JobStatus
 from app.db.repository import get_profile
 from app.db.session import get_session
 from app.docx_render import build_cover_letter_docx, build_resume_docx
+from playwright_worker.ashby import AshbyApply
+from playwright_worker.greenhouse import GreenhouseApply
 from playwright_worker.linkedin import LinkedInEasyApply
 from playwright_worker.portals import detect_portal as _detect_portal
 from playwright_worker.workday import WorkdayApply
@@ -106,7 +108,6 @@ def main(job_id: int) -> None:
         return
 
     # Prefer apply_url for portal detection; fall back to job URL
-    portal_url = None
     apply_url_for_detect = None
     with get_session() as session:
         job_row = session.scalar(select(Job).where(Job.id == job_id))
@@ -114,11 +115,10 @@ def main(job_id: int) -> None:
             apply_url_for_detect = job_row.apply_url
 
     portal = _detect_portal(apply_url_for_detect or job_url)
-    # For Workday, navigate to the apply_url if available (it's the application page)
-    if portal == "workday" and apply_url_for_detect:
-        portal_url = apply_url_for_detect
-    else:
-        portal_url = job_url
+    # apply_url is the actual application page (captured by the extension via
+    # LinkedIn's off-platform redirect); job_url is only a fallback for jobs
+    # captured before that existed, or where no apply_url was found.
+    portal_url = apply_url_for_detect or job_url
 
     # ── Resolve the resume file to upload ──────────────────────────────────────
     if resume_source == "ai_generated":
@@ -181,6 +181,10 @@ def main(job_id: int) -> None:
                     applier = LinkedInEasyApply(job_url=portal_url, **handler_kwargs)
                 elif portal == "workday":
                     applier = WorkdayApply(job_url=portal_url, **handler_kwargs)
+                elif portal == "ashby":
+                    applier = AshbyApply(job_url=portal_url, **handler_kwargs)
+                elif portal == "greenhouse":
+                    applier = GreenhouseApply(job_url=portal_url, **handler_kwargs)
                 else:
                     write_state(job_id, "error", error=f"Portal not yet supported: {portal}. Apply manually.")
                     return

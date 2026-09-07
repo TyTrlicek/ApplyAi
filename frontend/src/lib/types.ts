@@ -59,6 +59,8 @@ export interface MapProfile {
     email: string;
     phone: string;
     location: string;
+    street: string;
+    zip: string;
     linkedin: string;
     github: string;
     positioningNotes: string;

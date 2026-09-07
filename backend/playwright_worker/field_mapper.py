@@ -61,6 +61,8 @@ def get_known_value(label: str, profile: dict) -> str | None:
     email = personal.get("email", "")
     phone = personal.get("phone", "")
     location = personal.get("location", "")
+    street = personal.get("street", "")
+    zip_code = personal.get("zip", "")
     linkedin = personal.get("linkedin", "")
     github = personal.get("github", "")
     website = personal.get("website", "")
@@ -80,7 +82,11 @@ def get_known_value(label: str, profile: dict) -> str | None:
         return _digits_only(phone)
 
     # Location
-    if re.search(r"\b(city|location|zip|postal|address|where are you)\b", q):
+    if re.search(r"\b(zip|postal)\b", q):
+        return zip_code
+    if re.search(r"\baddress\b", q) and "email" not in q:
+        return street
+    if re.search(r"\b(city|location|where are you)\b", q):
         return _city(location)
 
     # Social
@@ -90,6 +96,10 @@ def get_known_value(label: str, profile: dict) -> str | None:
         return github
     if re.search(r"\b(website|portfolio|personal\s*url|personal\s*site)\b", q):
         return website or github
+
+    # Current employer
+    if re.search(r"\b(current\s+(company|employer)|most\s+recent\s+employer)\b", q):
+        return experience[0].get("company", "") if experience else None
 
     # Experience
     if re.search(r"\b(years?\s+of\s+experience|years?\s+experience|how\s+many\s+years)\b", q):

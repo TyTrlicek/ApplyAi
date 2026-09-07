@@ -288,6 +288,7 @@ class WorkdayApply:
 
         self._fill_if_empty(_FNAME, field_mapper._first_name(name), "First name")
         self._fill_if_empty(_LNAME, field_mapper._last_name(name), "Last name")
+        self._fill_if_empty(_STREET, personal.get("street", ""), "Street address")
         self._fill_if_empty(_CITY, city, "City")
         self._fill_if_empty(_ZIP, personal.get("zip", ""), "ZIP code")
 

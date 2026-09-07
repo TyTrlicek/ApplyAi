@@ -27,7 +27,7 @@ import type {
 
 const DEFAULT_PROFILE: MapProfile = {
   bio: "",
-  personal: { name: "", email: "", phone: "", location: "", linkedin: "", github: "", positioningNotes: "" },
+  personal: { name: "", email: "", phone: "", location: "", street: "", zip: "", linkedin: "", github: "", positioningNotes: "" },
   experience: [],
   education: { school: "", degree: "", field: "", graduation: "", gpa: "", honors: "", coursework: "" },
   techStack: { languages: "", frameworks: "", tools: "", cloud: "", other: "" },
@@ -50,7 +50,11 @@ export default function ProfilePage() {
   useEffect(() => {
     api.profile.get().then((data) => {
       if (data && Object.keys(data).length > 0) {
-        setProfile({ ...DEFAULT_PROFILE, ...data });
+        setProfile({
+          ...DEFAULT_PROFILE,
+          ...data,
+          personal: { ...DEFAULT_PROFILE.personal, ...data.personal },
+        });
       }
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
@@ -257,9 +261,12 @@ export default function ProfilePage() {
 
           {/* Personal */}
           <section>
-            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Personal Info
             </h2>
+            <p className="mb-3 text-xs text-muted-foreground/70">
+              Street Address and ZIP are only used to auto-fill Workday application forms.
+            </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {(
                 [
@@ -267,6 +274,8 @@ export default function ProfilePage() {
                   ["email", "Email"],
                   ["phone", "Phone"],
                   ["location", "Location"],
+                  ["street", "Street Address"],
+                  ["zip", "ZIP Code"],
                   ["linkedin", "LinkedIn URL"],
                   ["github", "GitHub URL"],
                 ] as [keyof MapProfile["personal"], string][]

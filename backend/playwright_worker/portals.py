@@ -11,7 +11,9 @@ def detect_portal(url: str | None) -> str:
         return "linkedin"
     if "myworkdayjobs.com" in u or "workday.com" in u:
         return "workday"
-    if "boards.greenhouse.io" in u or "greenhouse.io" in u:
+    if "ashbyhq.com" in u:
+        return "ashby"
+    if "greenhouse.io" in u:
         return "greenhouse"
     if "jobs.lever.co" in u or "lever.co" in u:
         return "lever"

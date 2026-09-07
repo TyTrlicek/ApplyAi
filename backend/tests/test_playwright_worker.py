@@ -12,6 +12,7 @@ PROFILE = {
         "email": "ty.trlicek@gmail.com",
         "phone": "(214) 555-0101",
         "location": "Dallas, TX",
+        "street": "1200 Main St",
         "linkedin": "https://linkedin.com/in/tylertrlicek",
         "github": "https://github.com/tylertrlicek",
         "website": "",
@@ -73,6 +74,24 @@ class TestGetKnownValue:
 
     def test_location(self):
         assert self.fn("Location", PROFILE) == "Dallas"
+
+    def test_zip(self):
+        assert self.fn("ZIP code", PROFILE) == "75201"
+
+    def test_postal_code(self):
+        assert self.fn("Postal Code", PROFILE) == "75201"
+
+    def test_street_address(self):
+        assert self.fn("Address", PROFILE) == "1200 Main St"
+
+    def test_address_does_not_shadow_email_address(self):
+        assert self.fn("Email address", PROFILE) == "ty.trlicek@gmail.com"
+
+    def test_current_company(self):
+        assert self.fn("Current company", PROFILE) == "Tyler Technologies"
+
+    def test_current_employer_variant(self):
+        assert self.fn("What is your current or most recent employer?", PROFILE) == "Tyler Technologies"
 
     def test_linkedin(self):
         assert self.fn("LinkedIn URL", PROFILE) == "https://linkedin.com/in/tylertrlicek"
@@ -264,6 +283,9 @@ class TestDetectPortal:
 
     def test_lever(self):
         assert self.fn("https://jobs.lever.co/openai/abc-123") == "lever"
+
+    def test_ashby(self):
+        assert self.fn("https://jobs.ashbyhq.com/whoop/0623a9e9-d7bb-4ee5-8100-51c68df81133/application") == "ashby"
 
     def test_unsupported_generic(self):
         assert self.fn("https://careers.google.com/jobs/results/123") == "unsupported"
