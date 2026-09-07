@@ -169,11 +169,16 @@ function setNativeValue(el, value) {
 - `answers.js`: collect unmapped `textarea` questions, one batched `POST /form-answers` (no-id, with job context) → fill results → flag every one as AI-generated in the review panel.
 - Hold Q/A pairs in the content script; include them in the `POST /jobs/capture` payload at submit-detection so they persist to `Job.form_answers` (decision 3 — no job row exists before then).
 
-### M4 — Workday adapter  ·  ~1–2 sessions (the hard part)
-- `adapters/workday.js`: `data-automation-id` selector map, custom dropdown/date components, multi-step (`fill page → user clicks Next → MutationObserver fires → re-run detect`).
-- Resume upload via Workday's widget.
-- "Use my last resume" / account-prefill path where Workday already has data.
-- Accept partial success — fill what's fillable, clearly flag the rest.
+### M4 — Workday adapter  ·  🚧 built, needs live verification behind sign-in
+- `adapters/workday.js` built from stable Workday `data-automation-id`s:
+  - `WD_FIELD_MAP` — automation-id suffix → semantic key (more reliable than label text on Workday)
+  - button-dropdown handler (click → `promptOption` listbox → pick), 3-spinner date handler (`dateSectionMonth/Day/Year-input`), skills multiselect (left for user), file input (`file-upload-input-ref`)
+  - `WD_BOOLEAN_IDS` — known yes/no questions (e.g. `candidateIsPreviousWorker` → No)
+  - `isApplicationForm()` / `stepName()` off `progressBar` + `*Page` ids
+- `index.js` multi-step: fill step → "⚡ Autofill this step" launcher re-arms on step change; submit-capture armed once, watches for `pageFooterSubmitButton` + success text
+- **Verified** against live NVIDIA Workday: adapter loads, `detectJobContext` (title/location/description) works, `isApplicationForm` correctly false on the posting page.
+- **Blocked:** steps 2–7 sit behind Workday account sign-in (can't create accounts / enter passwords). Needs Ty signed in to verify field coverage, then tune `WD_FIELD_MAP` + widget handlers from the review-panel output.
+- Not handled yet: "Use My Last Application" prefill path; Workday's drag-drop upload-zone variant.
 
 ### M5 — LinkedIn Easy Apply + cutover  ·  ~1 session
 - `adapters/linkedin.js`: Easy Apply modal, step-through, the existing external-apply-URL detection (already in `background.js`) still useful for logging.

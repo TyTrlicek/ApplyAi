@@ -50,12 +50,14 @@ AA.review = (() => {
     document.documentElement.appendChild(root);
   }
 
-  function mountLauncher(onFill) {
+  function mountLauncher(onFill, label) {
     ensureRoot();
+    if (panel) panel.remove();
     if (launcher) launcher.remove();
+    const text = label || "⚡ Autofill with ApplyAi";
     launcher = document.createElement("button");
     launcher.className = "launcher";
-    launcher.textContent = "⚡ Autofill with ApplyAi";
+    launcher.textContent = text;
     launcher.addEventListener("click", async () => {
       launcher.disabled = true;
       launcher.textContent = "Filling…";
@@ -65,7 +67,7 @@ AA.review = (() => {
         AA.warn(err);
         setStatus("Error: " + err.message);
         launcher.disabled = false;
-        launcher.textContent = "⚡ Autofill with ApplyAi";
+        launcher.textContent = text;
       }
     });
     shadow.appendChild(launcher);
@@ -76,7 +78,7 @@ AA.review = (() => {
     else if (launcher) launcher.textContent = text;
   }
 
-  function showResults(results, { onEdit } = {}) {
+  function showResults(results, { onEdit, multiStep, partial, stepName } = {}) {
     ensureRoot();
     if (launcher) launcher.remove();
     if (panel) panel.remove();
@@ -88,13 +90,22 @@ AA.review = (() => {
     const skipped = results.filter((r) => !r.filled);
     const ai = filled.filter((r) => r.aiGenerated).length;
 
+    const heading = multiStep
+      ? `ApplyAi — ${stepName || "step"} filled`
+      : "ApplyAi — review before submitting";
+    const footer = multiStep
+      ? `Check the fields below, then click <b>Next</b> on the page — I'll fill the next step automatically.${
+          partial ? " Workday has widgets I can't fill; anything left blank is yours." : ""
+        }`
+      : "Nothing is submitted automatically. Check the highlighted fields, then click <b>Submit</b> on the page yourself.";
+
     panel.innerHTML = `
-      <div class="hd"><strong>ApplyAi — review before submitting</strong><button data-x>×</button></div>
+      <div class="hd"><strong>${escapeHtml(heading)}</strong><button data-x>×</button></div>
       <div class="status">Filled ${filled.length} field${filled.length === 1 ? "" : "s"}${
       ai ? ` · ${ai} AI-drafted` : ""
     }${skipped.length ? ` · ${skipped.length} left for you` : ""}</div>
       <div class="list"></div>
-      <div class="ft">Nothing is submitted automatically. Check the highlighted fields, then click <b>Submit</b> on the page yourself.</div>
+      <div class="ft">${footer}</div>
     `;
     statusEl = panel.querySelector(".status");
     panel.querySelector("[data-x]").addEventListener("click", () => panel.remove());

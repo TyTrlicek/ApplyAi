@@ -120,5 +120,5 @@ AA.classify = (() => {
     return partial ? partial.raw : null;
   }
 
-  return { classify, valueFor, pickOption, YES, NO, DECLINE };
+  return { classify, valueFor, pickOption, booleanIntent, YES, NO, DECLINE };
 })();

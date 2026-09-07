@@ -4,6 +4,9 @@
 // is visible to every later file.
 
 window.AA = window.AA || {};
+// `var` (not const) so later content-script files in this same entry can refer
+// to bare `AA`, and so re-injection doesn't throw a redeclaration error.
+var AA = window.AA;
 
 AA.log = (...args) => console.debug("%c[ApplyAi]", "color:#4f46e5", ...args);
 AA.warn = (...args) => console.warn("[ApplyAi]", ...args);
