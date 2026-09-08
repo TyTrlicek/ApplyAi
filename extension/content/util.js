@@ -13,6 +13,23 @@ AA.warn = (...args) => console.warn("[ApplyAi]", ...args);
 
 AA.sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Poll `fn` until it returns truthy or the timeout elapses. Returns fn's last
+// value (falsy on timeout). Prefer this over blind sleeps.
+AA.waitFor = async (fn, { timeout = 8000, interval = 200 } = {}) => {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) {
+    let v;
+    try {
+      v = fn();
+    } catch {
+      v = null;
+    }
+    if (v) return v;
+    await AA.sleep(interval);
+  }
+  return null;
+};
+
 // Round-trip a message to background.js, which owns all HTTP to localhost:8000
 // (page-origin CORS / CSP would block a direct fetch from here).
 AA.bg = (type, payload) =>

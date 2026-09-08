@@ -117,14 +117,33 @@
         }
       }
 
-      await fillAuth(creds, document.querySelectorAll('input[type="password"]').length >= 2 ? "create" : "signin");
+      const mode = document.querySelectorAll('input[type="password"]').length >= 2 ? "create" : "signin";
+      let submitBtn = await fillAuth(creds, mode);
+      let resubmits = 0;
 
       // Outcomes: verification screen / "already exists" / straight into the form.
-      for (let i = 0; i < 24; i++) {
+      for (let i = 0; i < 30; i++) {
         await AA.sleep(500);
         if (this.isApplicationForm()) return { ok: true };
 
         const bodyText = document.body.innerText.slice(0, 3000);
+
+        // Still on the same auth form after the click — retry the submit (React
+        // sometimes drops the first synthetic press) up to twice.
+        if (
+          submitBtn &&
+          submitBtn.isConnected &&
+          document.querySelector('input[type="password"]') &&
+          resubmits < 2 &&
+          i > 2 &&
+          i % 4 === 0
+        ) {
+          resubmits++;
+          status("Submitting…");
+          AA.fill.realClick(submitBtn);
+          continue;
+        }
+
         if (/already (exists|in use|registered|an account)/i.test(bodyText) || /account.*already/i.test(bodyText)) {
           status("That account already exists — signing in…");
           (daq("signInLink") || btnByText(/^sign in$/i) || btnByText(/back to sign in/i))?.click();
@@ -339,12 +358,12 @@
       document.querySelector('[data-automation-id="createAccountSubmitButton"],[data-automation-id="signInSubmitButton"]') ||
       btnByText(mode === "create" ? /^create account$/i : /^sign in$/i) ||
       btnByText(/^(create account|sign in)$/i);
-    if (submit) {
-      submit.click();
-      await AA.sleep(1600);
-      return true;
-    }
-    return false;
+    if (!submit) return null;
+    // Workday's submit button, like its react-select, ignores a bare .click() —
+    // use the full pointer sequence.
+    AA.fill.realClick(submit);
+    await AA.sleep(1600);
+    return submit;
   }
 
   function wdLabel(el, wrap) {
