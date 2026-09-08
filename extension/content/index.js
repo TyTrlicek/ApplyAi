@@ -2,6 +2,14 @@
 // review panel, and capture the job into the pipeline once you submit.
 
 (() => {
+  // Guard against double-injection (auto content-script + popup "Autofill this
+  // page" button both loading the bundle).
+  if (window.__AA_ACTIVE__) {
+    AA.log("already active on this page — skipping re-init");
+    return;
+  }
+  window.__AA_ACTIVE__ = true;
+
   const adapter = pickAdapter();
   AA.log("adapter:", adapter.name, "on", AA.host);
 

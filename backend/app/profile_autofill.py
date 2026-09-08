@@ -9,6 +9,7 @@ Ty is a US citizen and needs no visa sponsorship — those answers are constant.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 
 
@@ -44,11 +45,15 @@ def _split_name(full: str) -> tuple[str, str]:
 
 
 def _split_location(loc: str) -> tuple[str, str]:
-    """'Dallas, TX' -> ('Dallas', 'TX'). Missing state -> ('', '')."""
+    """'Dallas, TX' -> ('Dallas', 'TX'). Strips trailing notes like
+    ' — Open to Relocation' or ' (Remote)'. Missing state -> ('', '')."""
     loc = (loc or "").strip()
+    # Drop a trailing free-text note: " - x", " — x", " (x)".
+    loc = re.split(r"\s+[—–-]\s+|\s*\(", loc)[0].strip()
     if "," in loc:
         city, _, rest = loc.partition(",")
-        return city.strip(), rest.strip().split(",")[0].strip()
+        state = rest.strip().split(",")[0].strip()
+        return city.strip(), state
     return loc, ""
 
 
@@ -62,6 +67,7 @@ def build_autofill_profile(profile: dict) -> dict:
     full_name = personal.get("name", "") or ""
     first, last = _split_name(full_name)
     city, state = _split_location(personal.get("location", ""))
+    clean_location = ", ".join(p for p in (city, state) if p) or (personal.get("location", "") or "")
 
     current = experience[0] if experience else {}
 
@@ -71,7 +77,7 @@ def build_autofill_profile(profile: dict) -> dict:
         "fullName": full_name,
         "email": personal.get("email", "") or "",
         "phone": personal.get("phone", "") or "",
-        "location": personal.get("location", "") or "",
+        "location": clean_location,
         "city": city,
         "state": state,
         "country": personal.get("country", "") or "United States",
