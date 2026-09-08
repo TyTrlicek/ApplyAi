@@ -116,13 +116,23 @@ AA.fill = (() => {
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }
 
-    const menuSel = '.select__menu,[class*="__menu"],[class*="Menu"],[role="listbox"]:not([hidden])';
-    const optSel = '.select__option,[class*="__option"],[class*="Option"],[role="option"]';
+    // intl-tel-input keeps a 240-country <li role=option> list in the DOM at all
+    // times — it must never be mistaken for the field's own menu.
+    const notIti = ':not(.iti__country):not([class*="iti__"])';
     for (let i = 0; i < 16; i++) {
       await AA.sleep(130);
-      const menus = [...document.querySelectorAll(menuSel)];
-      const menu = menus.find((m) => m.querySelector(optSel)) || null;
-      const opts = menu ? [...menu.querySelectorAll(optSel)].filter(AA.isVisible) : [];
+      // Prefer react-select's own menu (Greenhouse/Lever/Ashby/Workable).
+      let menu = [...document.querySelectorAll(".select__menu")].find(AA.isVisible);
+      let opts = menu ? [...menu.querySelectorAll(".select__option")].filter(AA.isVisible) : [];
+      if (!opts.length) {
+        const generic = [...document.querySelectorAll('[role="listbox"]:not([hidden]),[class*="__menu"],[class*="Menu"]')]
+          .filter((m) => !m.className.includes("iti__") && AA.isVisible(m))
+          .find((m) => m.querySelector(`[role="option"]${notIti},[class*="__option"]`));
+        menu = generic || null;
+        opts = menu
+          ? [...menu.querySelectorAll(`[role="option"]${notIti},[class*="__option"]`)].filter(AA.isVisible)
+          : [];
+      }
       if (opts.length) {
         const hit =
           opts.find((o) => _matches(AA.text(o), want)) || (opts.length === 1 ? opts[0] : null);

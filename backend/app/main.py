@@ -22,13 +22,19 @@ from app.db.session import init_db
 
 app = FastAPI(title="ApplyAi API", version="0.1.0")
 
-app.add_middleware(
-    CORSMiddleware,
+import os as _os
+
+_cors = dict(
     allow_origins=["http://localhost:3000", "http://localhost:3001", "http://localhost:3002"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Opt-in wide-open CORS for local extension-fill debugging only. Never set in prod.
+if _os.environ.get("APPLYAI_DEBUG_CORS") == "1":
+    _cors = dict(allow_origin_regex=".*", allow_methods=["*"], allow_headers=["*"])
+
+app.add_middleware(CORSMiddleware, **_cors)
 
 
 @app.on_event("startup")
@@ -55,3 +61,23 @@ app.include_router(apply_router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+if _os.environ.get("APPLYAI_DEBUG_CORS") == "1":
+    from pathlib import Path as _Path
+
+    from fastapi.responses import PlainTextResponse
+
+    @app.get("/debug/bundle.js")
+    def _debug_bundle():
+        """Concatenated content-script bundle + direct-fetch override, for
+        page-context testing without reloading the extension."""
+        ext = _Path(__file__).parents[2] / "extension" / "content"
+        order = [
+            "util.js", "profile.js", "classify.js", "detect.js", "fill.js",
+            "answers.js", "review.js", "adapters/generic.js", "adapters/workday.js",
+            "adapters/linkedin.js", "index.js",
+        ]
+        parts = [(ext / f).read_text() for f in order]
+        parts.append((_Path(__file__).parent / "_debug_bundle_override.js").read_text())
+        return PlainTextResponse("\n;\n".join(parts), media_type="application/javascript")
