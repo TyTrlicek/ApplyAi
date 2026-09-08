@@ -53,11 +53,95 @@
     candidateIsPreviousWorker: "no", // "Have you worked here before?" -> No
   };
 
+  const daq = (id, scope = document) => scope.querySelector(`[data-automation-id="${id}"]`);
+  const btnByText = (re) =>
+    [...document.querySelectorAll('button,a[role="button"],a')].find((b) => re.test(AA.text(b)));
+
   const wd = {
     name: "workday",
     match: (host) => /myworkdayjobs\.com|workday\.com/.test(host),
     isMultiStep: true,
     partial: true,
+
+    // ── Account creation / sign-in ────────────────────────────────────────────
+    // Workday gates every application behind an account (step 1 of N). The
+    // extension creates / signs into it using credentials the user stored in
+    // the popup (chrome.storage.local only). Passwords never reach the backend.
+
+    isAuthScreen() {
+      return !!(
+        daq("email") &&
+        daq("password") &&
+        !this.isApplicationForm()
+      );
+    },
+
+    // hooks.onVerify() -> Promise<string> (the emailed code); hooks.status(msg)
+    async authenticate(creds, hooks = {}) {
+      const status = hooks.status || (() => {});
+      if (!creds || !creds.email || !creds.password) {
+        return { ok: false, reason: "no Workday credentials set (open the ApplyAi popup)" };
+      }
+
+      // Prefer creating the account; fall back to sign-in if it already exists.
+      status("Creating your Workday account…");
+      const createLink = daq("createAccountLink") || btnByText(/create account/i);
+      if (createLink) {
+        createLink.click();
+        await AA.sleep(900);
+      }
+
+      await fillAuthField("email", creds.email);
+      await fillAuthField("password", creds.password);
+      await fillAuthField("verifyPassword", creds.password); // create-account only; no-op if absent
+      const agree = daq("createAccountCheckbox") || document.querySelector('input[type="checkbox"][data-automation-id]');
+      if (agree && !agree.checked) {
+        agree.click();
+        await AA.sleep(120);
+      }
+
+      const submit =
+        daq("createAccountSubmitButton") ||
+        daq("signInSubmitButton") ||
+        btnByText(/^(create account|sign in)$/i);
+      if (!submit) return { ok: false, reason: "couldn't find the submit button" };
+      submit.click();
+      await AA.sleep(1600);
+
+      // Outcomes: verification screen / "already exists" / straight into the form.
+      for (let i = 0; i < 20; i++) {
+        await AA.sleep(500);
+        if (this.isApplicationForm()) return { ok: true };
+
+        const err = AA.text(daq("errorMessage") || document.querySelector('[class*="error"]'));
+        if (/already (exists|in use|registered)/i.test(err)) {
+          status("Account exists — signing in instead…");
+          const signInLink = daq("signInLink") || btnByText(/sign in/i);
+          if (signInLink) {
+            signInLink.click();
+            await AA.sleep(800);
+          }
+          await fillAuthField("email", creds.email);
+          await fillAuthField("password", creds.password);
+          (daq("signInSubmitButton") || btnByText(/^sign in$/i))?.click();
+          await AA.sleep(1800);
+          continue;
+        }
+
+        const codeField =
+          daq("verificationCode") || document.querySelector('input[data-automation-id*="erificat"], input[data-automation-id*="Code"]');
+        if (codeField && hooks.onVerify) {
+          status("Enter the code Workday just emailed you.");
+          const code = await hooks.onVerify();
+          AA.fill.setNativeValue(codeField, code);
+          codeField.dispatchEvent(new Event("input", { bubbles: true }));
+          (daq("verifyButton") || btnByText(/verify|submit|continue/i))?.click();
+          await AA.sleep(1800);
+          continue;
+        }
+      }
+      return { ok: this.isApplicationForm(), reason: "auth did not resolve to the application form" };
+    },
 
     detectJobContext() {
       const g = (d) => {
@@ -203,6 +287,18 @@
       return null;
     },
   };
+
+  async function fillAuthField(dai, value) {
+    const el = document.querySelector(`input[data-automation-id="${dai}"]`);
+    if (!el || dai === "beecatcher") return false; // never touch the honeypot
+    el.focus();
+    AA.fill.setNativeValue(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    el.dispatchEvent(new Event("blur", { bubbles: true }));
+    await AA.sleep(120);
+    return true;
+  }
 
   function wdLabel(el, wrap) {
     const w = wrap || el.closest('[data-automation-id^="formField-"]') || el.parentElement;

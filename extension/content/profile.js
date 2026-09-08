@@ -43,5 +43,16 @@ AA.profile = (() => {
     }
   }
 
-  return { get, resume, refresh: () => get({ force: true }) };
+  // Workday sign-in credentials, set in the popup. Lives ONLY in this browser's
+  // chrome.storage.local — never fetched from or sent to the backend.
+  async function workdayCreds() {
+    try {
+      const { workdayCreds } = await chrome.storage.local.get("workdayCreds");
+      return workdayCreds && workdayCreds.email && workdayCreds.password ? workdayCreds : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return { get, resume, workdayCreds, refresh: () => get({ force: true }) };
 })();

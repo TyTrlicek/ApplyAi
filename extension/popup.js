@@ -25,12 +25,13 @@ async function check() {
 
   try {
     const health = await fetch(`${API}/health`).then((r) => r.json());
-    if (health.status === "ok") set("backend", "ok", "Backend connected");
-    else throw new Error();
+    if (health.status !== "ok") throw new Error();
+    set("backend", "ok", "Backend connected");
   } catch {
     set("backend", "down", "Backend not reachable — run uvicorn");
     set("profile", "down", "—");
     set("resume", "down", "—");
+    checkWorkday();
     return;
   }
 
@@ -46,7 +47,29 @@ async function check() {
   }
 
   document.getElementById("fill").disabled = !(profileOk && resumeOk);
+  checkWorkday();
 }
+
+async function checkWorkday() {
+  const { workdayCreds } = await chrome.storage.local.get("workdayCreds");
+  if (workdayCreds && workdayCreds.email && workdayCreds.password) {
+    set("wd", "ok", `Workday sign-in: ${workdayCreds.email}`);
+    document.getElementById("wd-email").value = workdayCreds.email;
+    document.getElementById("wd-pass").value = workdayCreds.password;
+  } else {
+    set("wd", "warn", "Workday sign-in: not set");
+  }
+}
+
+document.getElementById("wd-save").addEventListener("click", async () => {
+  const email = document.getElementById("wd-email").value.trim();
+  const password = document.getElementById("wd-pass").value;
+  await chrome.storage.local.set({ workdayCreds: email && password ? { email, password } : null });
+  const saved = document.getElementById("wd-saved");
+  saved.hidden = false;
+  setTimeout(() => (saved.hidden = true), 2500);
+  checkWorkday();
+});
 
 document.getElementById("fill").addEventListener("click", async () => {
   const btn = document.getElementById("fill");
@@ -54,8 +77,6 @@ document.getElementById("fill").addEventListener("click", async () => {
   btn.textContent = "Injecting…";
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    // If the bundle already auto-injected (allowlisted site), don't inject
-    // again — just nudge it. Otherwise inject the full bundle.
     const [{ result: alreadyActive }] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: () => !!window.__AA_ACTIVE__,

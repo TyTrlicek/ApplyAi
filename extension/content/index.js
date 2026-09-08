@@ -1,9 +1,8 @@
-// Orchestrator: detect the form, mount the launcher, run the fill, show the
-// review panel, and capture the job into the pipeline once you submit.
+// Orchestrator: detect the form (or the Workday sign-in), fill the current step,
+// render the status tracker, drive multi-step navigation, and capture the job to
+// the pipeline once it's submitted.
 
 (() => {
-  // Guard against double-injection (auto content-script + popup "Autofill this
-  // page" button both loading the bundle).
   if (window.__AA_ACTIVE__) {
     AA.log("already active on this page — skipping re-init");
     return;
@@ -14,162 +13,230 @@
   AA.log("adapter:", adapter.name, "on", AA.host);
 
   let launcherUp = false;
-  let filling = false;
-  let stepFilled = false; // this step's fill has run
+  let busy = false;
+  let stepDone = false;
   let lastStepKey = null;
   let submitArmed = false;
   let jobContext = null;
-  let heldAnswers = []; // [{question, answer}] — persisted only on submit (decision 3)
+  let heldAnswers = [];
 
   const stepKey = () => {
+    if (adapter.isAuthScreen && safe(() => adapter.isAuthScreen())) return "auth";
     if (!adapter.isMultiStep) return "single";
-    try {
-      return adapter.stepName ? adapter.stepName() : location.pathname;
-    } catch {
-      return location.pathname;
-    }
+    return safe(() => (adapter.stepName ? adapter.stepName() : location.pathname)) || location.pathname;
   };
 
   const scan = () => {
-    if (filling) return;
-
-    // Multi-step: a step change re-opens the launcher for the new step.
+    if (busy) return;
     const sk = stepKey();
     if (sk !== lastStepKey) {
       lastStepKey = sk;
-      stepFilled = false;
+      stepDone = false;
       launcherUp = false;
     }
-    if (launcherUp || stepFilled) return;
+    if (launcherUp || stepDone) return;
 
-    let isForm = false;
-    try {
-      isForm = adapter.isApplicationForm();
-    } catch (e) {
-      AA.warn("isApplicationForm threw", e);
-    }
-    if (isForm) {
+    const onAuth = adapter.isAuthScreen && safe(() => adapter.isAuthScreen());
+    const onForm = safe(() => adapter.isApplicationForm());
+    if (onAuth || onForm) {
       launcherUp = true;
-      AA.review.mountLauncher(runFill, adapter.isMultiStep ? `⚡ Autofill this step` : undefined);
-      AA.log("form detected — launcher mounted", adapter.isMultiStep ? `(step: ${sk})` : "");
+      const label = onAuth
+        ? "⚡ Sign in & autofill (ApplyAi)"
+        : adapter.isMultiStep
+        ? "⚡ Autofill this step"
+        : "⚡ Autofill with ApplyAi";
+      AA.tracker.mountLauncher(run, label);
+      AA.log("mounted launcher —", onAuth ? "auth screen" : `step: ${sk}`);
     }
   };
 
-  const mo = new MutationObserver(() => scan());
+  const mo = new MutationObserver(scan);
   mo.observe(document.documentElement, { childList: true, subtree: true });
   scan();
-  const scanInterval = setInterval(scan, 1500);
-  // Multi-step flows can take many minutes; keep scanning longer.
-  setTimeout(() => clearInterval(scanInterval), (adapter.isMultiStep ? 20 : 1) * 60000);
+  const iv = setInterval(scan, 1500);
+  setTimeout(() => clearInterval(iv), (adapter.isMultiStep ? 25 : 1) * 60000);
 
-  async function runFill() {
-    filling = true;
+  async function run() {
+    busy = true;
     try {
-      const profile = await AA.profile.get();
-      const resumeBlob = await AA.profile.resume();
-      jobContext = safe(() => adapter.detectJobContext()) || {};
-      AA.log("job context:", jobContext);
-
-      const fields = adapter.detectFields(document) || [];
-      const results = [];
-      const questions = [];
-      const questionFields = [];
-
-      for (const f of fields) {
-        const cls = classifyField(f);
-
-        // File inputs → resume (uploaded default; decision 4).
-        if (f.kind === "file" || f.wdKind === "file") {
-          const hint = (f.label + " " + (f.name || "") + " " + (f.id || "")).toLowerCase();
-          if (/cover\s*letter|coverletter/.test(hint)) {
-            results.push(row(f, { filled: false, reason: "cover letter not attached" }));
-            continue;
-          }
-          if (!resumeBlob) {
-            results.push(row(f, { filled: false, reason: "no default resume uploaded" }));
-            continue;
-          }
-          const target = f.kind === "file" ? f.el : adapter.fileInput && adapter.fileInput();
-          const ok = target && (await safeAsync(() => AA.fill.fillFile(target, resumeBlob)));
-          results.push(row(f, { filled: !!ok, value: resumeBlob.name, key: "resume", confidence: "high" }));
-          continue;
-        }
-
-        // Adapter-specific widgets (Workday dropdowns/dates/multiselect).
-        if (f.wdKind && adapter.fillField) {
-          const r = await safeAsync(() => adapter.fillField(f, { cls, profile, resumeBlob }));
-          if (r) {
-            results.push(row(f, { filled: !!r.filled, value: r.value || "", reason: r.reason || "", confidence: f.wdKey ? "high" : "medium" }));
-            continue;
-          }
-        }
-
-        // Unknown free-text textarea → queue for AI. Unknown selects/comboboxes/
-        // radios are left for the user (guessing an option is worse than blank).
-        if (cls.kind === "unknown") {
-          if (f.el.tagName === "TEXTAREA" && f.label && f.label.length > 8) {
-            questions.push(f.label);
-            questionFields.push(f);
-            continue;
-          }
-          results.push(row(f, { filled: false, reason: "unrecognised field — fill this one yourself" }));
-          continue;
-        }
-
-        const ok = await applyField(f, cls, profile);
-        results.push(
-          row(f, {
-            filled: !!ok,
-            value: displayValue(f, cls, profile),
-            key: cls.key,
-            confidence: confidenceOf(f),
-            reason: ok ? "" : "couldn't match an option",
-          })
-        );
-      }
-
-      // One batched AI call for the leftover questions.
-      if (questions.length) {
-        AA.review.setStatus(`Drafting ${questions.length} answer${questions.length === 1 ? "" : "s"}…`);
-        try {
-          const drafted = await AA.answers.draft(questions, jobContext);
-          heldAnswers = heldAnswers.concat(drafted);
-          for (let i = 0; i < questionFields.length; i++) {
-            const f = questionFields[i];
-            const answer = drafted[i]?.answer || "";
-            if (!answer) {
-              results.push(row(f, { filled: false, reason: "no draft returned" }));
-              continue;
-            }
-            const ok =
-              f.kind === "combobox"
-                ? await safeAsync(() => AA.fill.fillCombobox(f.el, answer))
-                : await safeAsync(() => AA.fill.fillText(f.el, answer));
-            results.push(row(f, { filled: !!ok, value: answer, aiGenerated: true, confidence: "low" }));
-          }
-        } catch (err) {
-          for (const f of questionFields) results.push(row(f, { filled: false, reason: "AI draft failed: " + err.message }));
-        }
-      }
-
-      stepFilled = true;
-      launcherUp = false;
-      AA.review.showResults(results, {
-        onEdit,
-        multiStep: adapter.isMultiStep,
-        partial: adapter.partial,
-        stepName: adapter.isMultiStep ? lastStepKey : null,
-      });
-      if (!submitArmed) {
-        armSubmitCapture();
-        submitArmed = true;
+      if (adapter.isAuthScreen && safe(() => adapter.isAuthScreen())) {
+        await runAuth();
+      } else {
+        await runStep();
       }
     } finally {
-      filling = false;
+      busy = false;
     }
   }
 
-  // wdKey (Workday's data-automation-id mapping) overrides label classification.
+  // ── Workday sign-in / account creation ────────────────────────────────────
+  async function runAuth() {
+    const creds = await AA.profile.workdayCreds();
+    if (!creds) {
+      AA.tracker.render(
+        { title: "Workday", phase: "auth", step: null, fields: [
+          { label: "Workday sign-in", required: true, status: "empty-required", note: "Open the ApplyAi popup → Workday sign-in credentials" },
+        ] },
+        {}
+      );
+      return;
+    }
+    AA.tracker.setStatus("Signing in to Workday…");
+    const res = await adapter.authenticate(creds, {
+      status: (m) => AA.tracker.setStatus(m),
+      onVerify: () =>
+        new Promise((resolve) => {
+          AA.tracker.verifyPrompt((code) => resolve(code));
+        }),
+    });
+    if (res.ok) {
+      stepDone = false;
+      lastStepKey = null; // force a re-scan onto the first form step
+      AA.tracker.setStatus("Signed in — loading the application…");
+    } else {
+      AA.tracker.setStatus("Sign-in failed: " + (res.reason || "unknown") + " — do it manually, I'll take over.");
+    }
+  }
+
+  // ── Fill one step, build the tracker report ──────────────────────────────
+  async function runStep() {
+    const profile = await AA.profile.get();
+    const resumeBlob = await AA.profile.resume();
+    jobContext = safe(() => adapter.detectJobContext()) || {};
+
+    const fields = (safe(() => adapter.detectFields(document)) || []).filter((f) => f.label || f.wdKind);
+    const report = [];
+    const questions = [];
+    const qFields = [];
+
+    for (const f of fields) {
+      const cls = classifyField(f);
+      const rec = { label: f.label || f.wdId || "field", required: !!f.required, ref: f.el, status: "empty-optional", value: "", note: "" };
+
+      if (f.kind === "file" || f.wdKind === "file") {
+        const hint = (f.label + " " + (f.name || "") + " " + (f.id || "")).toLowerCase();
+        if (/cover\s*letter|coverletter/.test(hint)) {
+          finish(rec, false, "", "cover letter not attached");
+        } else if (!resumeBlob) {
+          finish(rec, false, "", "no default resume — upload one on the Profile page");
+        } else {
+          const target = f.kind === "file" ? f.el : adapter.fileInput && adapter.fileInput();
+          const ok = target && (await safeAsync(() => AA.fill.fillFile(target, resumeBlob)));
+          finish(rec, !!ok, resumeBlob.name, ok ? "" : "upload widget not found — attach it yourself");
+        }
+        report.push(rec);
+        continue;
+      }
+
+      if (f.wdKind && adapter.fillField) {
+        const r = await safeAsync(() => adapter.fillField(f, { cls, profile, resumeBlob }));
+        if (r) {
+          finish(rec, !!r.filled, r.value || displayValue(f, cls, profile), r.filled ? "" : r.reason || "fill this one yourself");
+          report.push(rec);
+          continue;
+        }
+      }
+
+      if (cls.kind === "unknown") {
+        if (f.el.tagName === "TEXTAREA" && f.label && f.label.length > 8) {
+          questions.push(f.label);
+          qFields.push({ f, rec });
+          continue;
+        }
+        finish(rec, false, "", "not recognised — fill this one yourself");
+        report.push(rec);
+        continue;
+      }
+
+      const ok = await applyField(f, cls, profile);
+      finish(rec, !!ok, displayValue(f, cls, profile), ok ? "" : "couldn't match an option");
+      if (ok && confidenceOf(f) === "low") rec.status = "review", (rec.note = "fuzzy match — double-check");
+      report.push(rec);
+    }
+
+    if (questions.length) {
+      AA.tracker.setStatus(`Drafting ${questions.length} answer${questions.length === 1 ? "" : "s"} with AI…`);
+      try {
+        const drafted = await AA.answers.draft(questions, jobContext);
+        heldAnswers = heldAnswers.concat(drafted);
+        for (let i = 0; i < qFields.length; i++) {
+          const { f, rec } = qFields[i];
+          const answer = drafted[i]?.answer || "";
+          if (!answer) {
+            finish(rec, false, "", "no draft returned");
+          } else {
+            const ok = await safeAsync(() => AA.fill.fillText(f.el, answer));
+            finish(rec, !!ok, answer, "");
+            if (ok) rec.status = "review", (rec.note = "AI-drafted — read before submitting");
+          }
+          report.push(rec);
+        }
+      } catch (err) {
+        for (const { rec } of qFields) {
+          finish(rec, false, "", "AI draft failed: " + err.message);
+          report.push(rec);
+        }
+      }
+    }
+
+    stepDone = true;
+    launcherUp = false;
+
+    const step = adapter.isMultiStep ? stepInfo() : null;
+    AA.tracker.render(
+      { title: adapter.name === "workday" ? "Workday" : jobContext.company || null, step, phase: step && step.index >= step.total ? "review" : "fill", fields: report },
+      {
+        onJump: (fld) => AA.tracker.jumpTo(fld.ref),
+        onNext: adapter.isMultiStep ? goNext : null,
+      }
+    );
+
+    if (!submitArmed) {
+      armSubmitCapture();
+      submitArmed = true;
+    }
+  }
+
+  function finish(rec, ok, value, note) {
+    if (ok) {
+      rec.status = "filled";
+      rec.value = value;
+    } else {
+      rec.status = rec.required ? "empty-required" : note.includes("yourself") || note ? "skipped" : "empty-optional";
+      rec.note = note;
+    }
+  }
+
+  async function goNext() {
+    const btn = adapter.nextButton && adapter.nextButton();
+    if (!btn) {
+      AA.tracker.setStatus("Couldn't find Workday's Next button — click it yourself.");
+      return;
+    }
+    const before = stepKey();
+    btn.click();
+    AA.tracker.setStatus("Advancing…");
+    for (let i = 0; i < 30; i++) {
+      await AA.sleep(400);
+      if (stepKey() !== before && safe(() => adapter.isApplicationForm())) {
+        stepDone = false;
+        lastStepKey = stepKey();
+        await AA.sleep(600);
+        return runStep();
+      }
+    }
+    AA.tracker.setStatus("Next step didn't load — Workday may want a required field. Check the page.");
+    stepDone = false;
+  }
+
+  function stepInfo() {
+    // "step 3 of 7" appears in Workday's progress text.
+    const m = (document.body.innerText.match(/step\s+(\d+)\s+of\s+(\d+)/i) || []).slice(1).map(Number);
+    const name = safe(() => adapter.stepName()) || "Application";
+    return { name, index: m[0] || 1, total: m[1] || 5 };
+  }
+
+  // ── classification / filling ────────────────────────────────────────────
   function classifyField(f) {
     if (f.wdKey) {
       const BOOL = { workAuthorized: 1, usCitizen: 1, needsSponsorship: 1 };
@@ -200,11 +267,8 @@
     return AA.fill.fillText(f.el, value);
   }
 
-  // Build the option target for a combobox from its classification.
   function comboboxWant(cls, profile) {
     if (cls.kind === "decline") {
-      // Don't type a filter — "I don't wish to answer" wouldn't survive typing
-      // "decline". Open the full list and match the regex.
       return { typed: "", match: /decline|prefer not|wish (not )?to (answer|disclose|identify)|not to (say|answer|disclose|identify)|don'?t wish|rather not/ };
     }
     if (cls.kind === "boolean") {
@@ -215,26 +279,13 @@
     return v ? { text: v, typed: v } : null;
   }
 
-  async function onEdit(result, newValue) {
-    const fields = adapter.detectFields(document) || [];
-    const f = fields.find((x) => (x.label || "") === (result.label || ""));
-    if (!f) return;
-    if (f.wdKind === "dropdown" && adapter.fillField) {
-      await safeAsync(() => adapter.fillField({ ...f, wdKey: null, label: newValue }, { cls: { key: null }, profile: {} }));
-    } else if (f.kind === "select") await AA.fill.fillSelect(f.el, newValue);
-    else if (f.kind === "combobox") await AA.fill.fillCombobox(f.el, newValue);
-    else await AA.fill.fillText(f.el, newValue);
-    const h = heldAnswers.find((a) => a.question === result.label);
-    if (h) h.answer = newValue;
-  }
-
-  // Decision 3: nothing is written to the DB until we see a submit.
+  // ── submit → capture (decision 3) ───────────────────────────────────────
   function armSubmitCapture() {
     let captured = false;
     const capture = async (why) => {
       if (captured) return;
       captured = true;
-      AA.log("submit detected via", why, "— capturing job");
+      AA.log("submit detected via", why);
       try {
         await AA.bg("CAPTURE_APPLIED", {
           job: {
@@ -246,7 +297,7 @@
           },
           formAnswers: heldAnswers,
         });
-        AA.review.setStatus("Logged to your ApplyAi pipeline as applied ✓");
+        AA.tracker.setStatus("Logged to your ApplyAi pipeline as applied ✓");
       } catch (err) {
         AA.warn("capture failed", err);
       }
@@ -266,33 +317,29 @@
       true
     );
 
-    const successMo = new MutationObserver(() => {
-      const body = AA.normalize(document.body.innerText).slice(0, 4000);
-      if (/(application (was )?submitted|thank you for applying|we('| ha)ve received your application|successfully submitted|your application has been submitted)/.test(body)) {
+    const smo = new MutationObserver(() => {
+      const b = AA.normalize(document.body.innerText).slice(0, 4000);
+      if (/(application (was )?submitted|thank you for applying|we('| ha)ve received your application|successfully submitted|your application has been submitted)/.test(b)) {
         capture("success-text");
-        successMo.disconnect();
+        smo.disconnect();
       }
     });
-    successMo.observe(document.body, { childList: true, subtree: true, characterData: true });
-    setTimeout(() => successMo.disconnect(), 30 * 60 * 1000);
+    smo.observe(document.body, { childList: true, subtree: true, characterData: true });
+    setTimeout(() => smo.disconnect(), 30 * 60 * 1000);
   }
 
   function confirmSubmitted(capture) {
-    const body = AA.normalize(document.body.innerText).slice(0, 4000);
-    const gone = !safe(() => adapter.isApplicationForm());
-    if (gone || /(submitted|thank you|received your application)/.test(body)) capture("submit-click");
+    const b = AA.normalize(document.body.innerText).slice(0, 4000);
+    if (!safe(() => adapter.isApplicationForm()) || /(submitted|thank you|received your application)/.test(b)) capture("submit-click");
   }
 
-  // ---- helpers ----
+  // ── helpers ─────────────────────────────────────────────────────────────
   function pickAdapter() {
     for (const name of ["workday", "linkedin"]) {
       const a = AA.adapters[name];
       if (a && safe(() => a.match(AA.host))) return a;
     }
     return AA.adapters.generic;
-  }
-  function row(f, extra) {
-    return { label: f.label, kind: f.wdKind || f.kind, filled: false, value: "", aiGenerated: false, confidence: "medium", ...extra };
   }
   function confidenceOf(f) {
     if (["for", "wrap", "legend"].includes(f.labelSource)) return "high";
