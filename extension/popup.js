@@ -54,9 +54,17 @@ document.getElementById("fill").addEventListener("click", async () => {
   btn.textContent = "Injecting…";
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   try {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: CONTENT_FILES });
-    btn.textContent = "Running — see the page";
-    setTimeout(() => window.close(), 800);
+    // If the bundle already auto-injected (allowlisted site), don't inject
+    // again — just nudge it. Otherwise inject the full bundle.
+    const [{ result: alreadyActive }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => !!window.__AA_ACTIVE__,
+    });
+    if (!alreadyActive) {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: CONTENT_FILES });
+    }
+    btn.textContent = alreadyActive ? "Already running here" : "Running — see the page";
+    setTimeout(() => window.close(), 900);
   } catch (err) {
     btn.textContent = "Failed: " + err.message.slice(0, 30);
     btn.disabled = false;
