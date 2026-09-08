@@ -68,17 +68,25 @@
     // extension creates / signs into it using credentials the user stored in
     // the popup (chrome.storage.local only). Passwords never reach the backend.
 
-    isAuthScreen() {
-      // The sign-in / create-account screen: a password input is present and
-      // there's no actual application-step content. Workday shows the "step 1
-      // of N" progress bar here too, so that alone doesn't mean "in the form".
-      const hasPw = !!document.querySelector('input[type="password"]');
-      const hasStepForm = !!document.querySelector(
+    _onStepForm() {
+      return !!document.querySelector(
         '[data-automation-id="pageFooterNextButton"],[data-automation-id="myInformationPage"],' +
           '[data-automation-id="myExperiencePage"],[data-automation-id="questionnairePage"],' +
-          '[data-automation-id="voluntaryDisclosuresPage"],[data-automation-id="fileUploadDropZone"]'
+          '[data-automation-id="voluntaryDisclosuresPage"],[data-automation-id="fileUploadDropZone"],' +
+          '[data-automation-id="formField-legalNameSection_firstName"]'
       );
-      return hasPw && !hasStepForm;
+    },
+
+    isAuthScreen() {
+      if (this._onStepForm()) return false;
+      // Either the email/password form, or the first "Sign in with …" chooser
+      // screen (which needs a "Sign in with email" click to reveal the fields).
+      if (document.querySelector('input[type="password"]')) return true;
+      const txt = document.body.innerText.slice(0, 2500);
+      return (
+        /sign in with (google|email|linkedin)|create account/i.test(txt) &&
+        !!btnByText(/sign in with email|create account/i)
+      );
     },
 
     // hooks.onVerify() -> Promise<string> (the emailed code); hooks.status(msg)
@@ -88,17 +96,28 @@
         return { ok: false, reason: "no Workday credentials set — open the ApplyAi popup" };
       }
 
-      // On the sign-in screen, switch to Create Account first.
       status("Creating your Workday account…");
-      if (!/create account/i.test(document.body.innerText.slice(0, 3000)) || document.querySelectorAll('input[type="password"]').length < 2) {
-        const createLink = daq("createAccountLink") || btnByText(/create account/i);
-        if (createLink) {
-          createLink.click();
-          await AA.sleep(1000);
+
+      // Step A: the "Sign in with Google / email / LinkedIn" chooser — take the
+      // email path to reveal the actual fields.
+      if (!document.querySelector('input[type="password"]')) {
+        const emailPath = btnByText(/sign in with email/i);
+        if (emailPath) {
+          emailPath.click();
+          await AA.sleep(1200);
         }
       }
 
-      await fillAuth(creds, "create");
+      // Step B: switch from the sign-in form to Create Account.
+      if (document.querySelectorAll('input[type="password"]').length < 2) {
+        const createLink = daq("createAccountLink") || btnByText(/create account/i);
+        if (createLink) {
+          createLink.click();
+          await AA.sleep(1200);
+        }
+      }
+
+      await fillAuth(creds, document.querySelectorAll('input[type="password"]').length >= 2 ? "create" : "signin");
 
       // Outcomes: verification screen / "already exists" / straight into the form.
       for (let i = 0; i < 24; i++) {
