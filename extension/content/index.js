@@ -90,11 +90,19 @@
         }),
     });
     if (res.ok) {
-      stepDone = false;
-      lastStepKey = null; // force a re-scan onto the first form step
-      AA.tracker.setStatus("Signed in — loading the application…");
+      AA.tracker.setStatus("Signed in — filling the application…");
+      // Wait for the first step to render, then fill it automatically.
+      for (let i = 0; i < 20; i++) {
+        await AA.sleep(500);
+        if (safe(() => adapter.isApplicationForm())) {
+          lastStepKey = stepKey();
+          stepDone = false;
+          return runStep();
+        }
+      }
+      lastStepKey = null;
     } else {
-      AA.tracker.setStatus("Sign-in failed: " + (res.reason || "unknown") + " — do it manually, I'll take over.");
+      AA.tracker.setStatus("Sign-in failed: " + (res.reason || "unknown") + " — do it manually, I'll take over from the form.");
     }
   }
 

@@ -148,8 +148,19 @@ AA.detect = (() => {
     return "text";
   }
 
+  // Bot-trap fields: never fill these. Workday's is data-automation-id="beecatcher"
+  // with a visible "for robots only" label; others use tabindex=-1 / aria-hidden /
+  // autocomplete tricks.
+  function isHoneypot(el) {
+    if (el.getAttribute("data-automation-id") === "beecatcher") return true;
+    if (el.tabIndex === -1 || el.getAttribute("aria-hidden") === "true") return true;
+    if (/honeypot|bot-?field/i.test((el.name || "") + " " + (el.className || ""))) return true;
+    const lbl = resolveLabel(el).label || "";
+    return /for robots only|do not enter if you'?re human|leave (this|the) field (blank|empty)/i.test(lbl);
+  }
+
   function detectFields(root = document) {
-    const controls = [...AA.deepQueryAll(CONTROL_SEL, root)].filter(AA.isVisible);
+    const controls = [...AA.deepQueryAll(CONTROL_SEL, root)].filter((el) => AA.isVisible(el) && !isHoneypot(el));
     const { groups, singles } = groupControls(controls);
     const fields = [];
 

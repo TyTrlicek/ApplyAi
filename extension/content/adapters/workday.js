@@ -69,78 +69,66 @@
     // the popup (chrome.storage.local only). Passwords never reach the backend.
 
     isAuthScreen() {
-      return !!(
-        daq("email") &&
-        daq("password") &&
-        !this.isApplicationForm()
+      // The sign-in / create-account screen: a password input is present and
+      // there's no actual application-step content. Workday shows the "step 1
+      // of N" progress bar here too, so that alone doesn't mean "in the form".
+      const hasPw = !!document.querySelector('input[type="password"]');
+      const hasStepForm = !!document.querySelector(
+        '[data-automation-id="pageFooterNextButton"],[data-automation-id="myInformationPage"],' +
+          '[data-automation-id="myExperiencePage"],[data-automation-id="questionnairePage"],' +
+          '[data-automation-id="voluntaryDisclosuresPage"],[data-automation-id="fileUploadDropZone"]'
       );
+      return hasPw && !hasStepForm;
     },
 
     // hooks.onVerify() -> Promise<string> (the emailed code); hooks.status(msg)
     async authenticate(creds, hooks = {}) {
       const status = hooks.status || (() => {});
       if (!creds || !creds.email || !creds.password) {
-        return { ok: false, reason: "no Workday credentials set (open the ApplyAi popup)" };
+        return { ok: false, reason: "no Workday credentials set — open the ApplyAi popup" };
       }
 
-      // Prefer creating the account; fall back to sign-in if it already exists.
+      // On the sign-in screen, switch to Create Account first.
       status("Creating your Workday account…");
-      const createLink = daq("createAccountLink") || btnByText(/create account/i);
-      if (createLink) {
-        createLink.click();
-        await AA.sleep(900);
+      if (!/create account/i.test(document.body.innerText.slice(0, 3000)) || document.querySelectorAll('input[type="password"]').length < 2) {
+        const createLink = daq("createAccountLink") || btnByText(/create account/i);
+        if (createLink) {
+          createLink.click();
+          await AA.sleep(1000);
+        }
       }
 
-      await fillAuthField("email", creds.email);
-      await fillAuthField("password", creds.password);
-      await fillAuthField("verifyPassword", creds.password); // create-account only; no-op if absent
-      const agree = daq("createAccountCheckbox") || document.querySelector('input[type="checkbox"][data-automation-id]');
-      if (agree && !agree.checked) {
-        agree.click();
-        await AA.sleep(120);
-      }
-
-      const submit =
-        daq("createAccountSubmitButton") ||
-        daq("signInSubmitButton") ||
-        btnByText(/^(create account|sign in)$/i);
-      if (!submit) return { ok: false, reason: "couldn't find the submit button" };
-      submit.click();
-      await AA.sleep(1600);
+      await fillAuth(creds, "create");
 
       // Outcomes: verification screen / "already exists" / straight into the form.
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 24; i++) {
         await AA.sleep(500);
         if (this.isApplicationForm()) return { ok: true };
 
-        const err = AA.text(daq("errorMessage") || document.querySelector('[class*="error"]'));
-        if (/already (exists|in use|registered)/i.test(err)) {
-          status("Account exists — signing in instead…");
-          const signInLink = daq("signInLink") || btnByText(/sign in/i);
-          if (signInLink) {
-            signInLink.click();
-            await AA.sleep(800);
-          }
-          await fillAuthField("email", creds.email);
-          await fillAuthField("password", creds.password);
-          (daq("signInSubmitButton") || btnByText(/^sign in$/i))?.click();
-          await AA.sleep(1800);
+        const bodyText = document.body.innerText.slice(0, 3000);
+        if (/already (exists|in use|registered|an account)/i.test(bodyText) || /account.*already/i.test(bodyText)) {
+          status("That account already exists — signing in…");
+          (daq("signInLink") || btnByText(/^sign in$/i) || btnByText(/back to sign in/i))?.click();
+          await AA.sleep(1000);
+          await fillAuth(creds, "signin");
+          await AA.sleep(1500);
           continue;
         }
 
-        const codeField =
-          daq("verificationCode") || document.querySelector('input[data-automation-id*="erificat"], input[data-automation-id*="Code"]');
-        if (codeField && hooks.onVerify) {
-          status("Enter the code Workday just emailed you.");
+        const codeField = document.querySelector(
+          'input[data-automation-id*="erificat" i],input[data-automation-id*="code" i],input[autocomplete="one-time-code"]'
+        );
+        if (codeField && hooks.onVerify && !codeField.dataset.aaTried) {
+          codeField.dataset.aaTried = "1";
+          status("Enter the code Workday emailed you.");
           const code = await hooks.onVerify();
-          AA.fill.setNativeValue(codeField, code);
-          codeField.dispatchEvent(new Event("input", { bubbles: true }));
-          (daq("verifyButton") || btnByText(/verify|submit|continue/i))?.click();
+          el_set(codeField, code);
+          (btnByText(/verify|submit|continue/i))?.click();
           await AA.sleep(1800);
           continue;
         }
       }
-      return { ok: this.isApplicationForm(), reason: "auth did not resolve to the application form" };
+      return { ok: this.isApplicationForm(), reason: "sign-in didn't reach the application form" };
     },
 
     detectJobContext() {
@@ -162,14 +150,17 @@
       return ctx;
     },
 
-    // We're in the wizard (not the job posting / sign-in) if the step footer or
-    // a known application section is present.
+    // We're in the wizard (not the job posting / sign-in) if a step footer or a
+    // known application section is present. NB the "step 1 of N" progress bar
+    // shows on the sign-in screen too, so it's not a valid marker on its own.
     isApplicationForm() {
+      if (this.isAuthScreen()) return false;
       return !!document.querySelector(
         '[data-automation-id="pageFooterNextButton"],[data-automation-id="bottom-navigation-next-button"],' +
-          '[data-automation-id="pageFooterSubmitButton"],[data-automation-id="progressBar"],' +
+          '[data-automation-id="pageFooterSubmitButton"],' +
           '[data-automation-id="myInformationPage"],[data-automation-id="myExperiencePage"],' +
-          '[data-automation-id="questionnairePage"],[data-automation-id="voluntaryDisclosuresPage"]'
+          '[data-automation-id="questionnairePage"],[data-automation-id="voluntaryDisclosuresPage"],' +
+          '[data-automation-id="formField-legalNameSection_firstName"],[data-automation-id="fileUploadDropZone"]'
       );
     },
 
@@ -288,16 +279,53 @@
     },
   };
 
-  async function fillAuthField(dai, value) {
-    const el = document.querySelector(`input[data-automation-id="${dai}"]`);
-    if (!el || dai === "beecatcher") return false; // never touch the honeypot
+  function el_set(el, value) {
+    if (!el) return false;
     el.focus();
     AA.fill.setNativeValue(el, value);
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.dispatchEvent(new Event("blur", { bubbles: true }));
-    await AA.sleep(120);
     return true;
+  }
+
+  const isHoneypot = (el) =>
+    el.getAttribute("data-automation-id") === "beecatcher" ||
+    /robot|do not enter|human/i.test(el.getAttribute("aria-label") || "") ||
+    el.tabIndex === -1;
+
+  // mode: "create" (email + password + verify + agree) or "signin" (email + password)
+  async function fillAuth(creds, mode) {
+    const emailEl =
+      document.querySelector('input[data-automation-id="email"]') ||
+      document.querySelector('input[type="email"]') ||
+      [...document.querySelectorAll("input[type=text],input:not([type])")].find((i) => !isHoneypot(i));
+    const pwEls = [...document.querySelectorAll('input[type="password"]')].filter((i) => !isHoneypot(i));
+
+    el_set(emailEl, creds.email);
+    await AA.sleep(150);
+    if (pwEls[0]) el_set(pwEls[0], creds.password);
+    if (mode === "create" && pwEls[1]) el_set(pwEls[1], creds.password);
+    await AA.sleep(150);
+
+    if (mode === "create") {
+      const agree = [...document.querySelectorAll('input[type="checkbox"]')].find((c) => !isHoneypot(c));
+      if (agree && !agree.checked) {
+        agree.click();
+        await AA.sleep(150);
+      }
+    }
+
+    const submit =
+      document.querySelector('[data-automation-id="createAccountSubmitButton"],[data-automation-id="signInSubmitButton"]') ||
+      btnByText(mode === "create" ? /^create account$/i : /^sign in$/i) ||
+      btnByText(/^(create account|sign in)$/i);
+    if (submit) {
+      submit.click();
+      await AA.sleep(1600);
+      return true;
+    }
+    return false;
   }
 
   function wdLabel(el, wrap) {
