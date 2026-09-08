@@ -57,35 +57,86 @@ AA.fill = (() => {
     return true;
   }
 
-  // Custom combobox (role=combobox / typeahead): type, wait for the listbox,
-  // click the option that matches.
-  async function fillCombobox(el, value) {
-    el.focus();
-    const input = el.matches("input,textarea") ? el : el.querySelector("input,textarea") || el;
-    if (input.isContentEditable) {
-      input.textContent = value;
-    } else {
-      setNativeValue(input, value);
-    }
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+  // A full, realistic pointer press+release+click. React-select v5 (Greenhouse,
+  // Lever, Ashby, Workable all use it) ignores lone synthetic mousedown/keydown
+  // but honours this sequence.
+  function realClick(el) {
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const base = {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      view: window,
+      button: 0,
+      clientX: r.left + r.width / 2,
+      clientY: r.top + r.height / 2,
+    };
+    el.dispatchEvent(new PointerEvent("pointerdown", { ...base, buttons: 1, pointerId: 1, isPrimary: true }));
+    el.dispatchEvent(new MouseEvent("mousedown", { ...base, buttons: 1 }));
+    el.dispatchEvent(new PointerEvent("pointerup", { ...base, buttons: 0, pointerId: 1 }));
+    el.dispatchEvent(new MouseEvent("mouseup", { ...base, buttons: 0 }));
+    el.dispatchEvent(new MouseEvent("click", { ...base, buttons: 0 }));
+  }
 
-    for (let i = 0; i < 12; i++) {
-      await AA.sleep(120);
-      const listbox = document.querySelector('[role="listbox"]:not([hidden]),ul[class*="menu"]:not([hidden])');
-      const opts = listbox ? [...listbox.querySelectorAll('[role="option"],li')] : [];
-      const vNorm = AA.normalize(value);
-      const hit =
-        opts.find((o) => AA.normalize(AA.text(o)) === vNorm) ||
-        opts.find((o) => AA.normalize(AA.text(o)).includes(vNorm)) ||
-        opts.find((o) => vNorm.includes(AA.normalize(AA.text(o))));
-      if (hit) {
-        hit.scrollIntoView({ block: "nearest" });
-        hit.click();
-        input.dispatchEvent(new Event("blur", { bubbles: true }));
-        return true;
+  const _norm = (s) => AA.normalize(s);
+  function _matches(optText, want) {
+    const o = _norm(optText);
+    if (want.match instanceof RegExp) return want.match.test(o);
+    const w = _norm(want.text || want);
+    return o === w || o.startsWith(w) || o.includes(w) || w.includes(o);
+  }
+
+  // Combobox filler. `want` is a string, or { text, typed, match:RegExp }.
+  //   typed  — what to type into the input to filter (default: want.text/want)
+  //   match  — regex an option must satisfy (overrides text matching)
+  // Returns true only if an option was actually chosen.
+  async function fillCombobox(el, want) {
+    const input = el.matches("input,textarea") ? el : el.querySelector("input,textarea") || el;
+    const typed = (want && want.typed) || want.text || (typeof want === "string" ? want : "");
+    const control = input.closest('.select__control,[class*="-control"]');
+
+    // Close any menu left open by a previous field.
+    document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }));
+    await AA.sleep(40);
+
+    input.focus();
+    if (control) {
+      realClick(control.querySelector('[class*="indicator"]') || control);
+      await AA.sleep(140);
+    } else {
+      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }));
+    }
+
+    if (typed && !input.isContentEditable) {
+      setNativeValue(input, typed);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    } else if (typed) {
+      input.textContent = typed;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+
+    const menuSel = '.select__menu,[class*="__menu"],[class*="Menu"],[role="listbox"]:not([hidden])';
+    const optSel = '.select__option,[class*="__option"],[class*="Option"],[role="option"]';
+    for (let i = 0; i < 16; i++) {
+      await AA.sleep(130);
+      const menus = [...document.querySelectorAll(menuSel)];
+      const menu = menus.find((m) => m.querySelector(optSel)) || null;
+      const opts = menu ? [...menu.querySelectorAll(optSel)].filter(AA.isVisible) : [];
+      if (opts.length) {
+        const hit =
+          opts.find((o) => _matches(AA.text(o), want)) || (opts.length === 1 ? opts[0] : null);
+        if (hit) {
+          hit.scrollIntoView({ block: "nearest" });
+          realClick(hit);
+          await AA.sleep(120);
+          const sv = control && control.querySelector('.select__single-value,[class*="singleValue"]');
+          input.dispatchEvent(new Event("blur", { bubbles: true }));
+          return control ? !!sv : true;
+        }
       }
     }
+    if (control) realClick(control.querySelector('[class*="indicator"]') || control); // close
     input.dispatchEvent(new Event("blur", { bubbles: true }));
     return false;
   }
@@ -102,5 +153,5 @@ AA.fill = (() => {
     return true;
   }
 
-  return { fillText, fillContentEditable, fillSelect, pickRadio, fillCombobox, fillFile, setNativeValue };
+  return { fillText, fillContentEditable, fillSelect, pickRadio, fillCombobox, fillFile, setNativeValue, realClick };
 })();

@@ -192,12 +192,27 @@
       return AA.fill.pickRadio(f.members, opt ? opt.el : null);
     }
     if (f.kind === "combobox") {
-      const v = AA.classify.valueFor(cls.key, profile);
-      return v ? AA.fill.fillCombobox(f.el, v) : false;
+      const want = comboboxWant(cls, profile);
+      return want ? AA.fill.fillCombobox(f.el, want) : false;
     }
     const value = AA.classify.valueFor(cls.key, profile);
     if (!value) return false;
     return AA.fill.fillText(f.el, value);
+  }
+
+  // Build the option target for a combobox from its classification.
+  function comboboxWant(cls, profile) {
+    if (cls.kind === "decline") {
+      // Don't type a filter — "I don't wish to answer" wouldn't survive typing
+      // "decline". Open the full list and match the regex.
+      return { typed: "", match: /decline|prefer not|wish (not )?to (answer|disclose|identify)|not to (say|answer|disclose|identify)|don'?t wish|rather not/ };
+    }
+    if (cls.kind === "boolean") {
+      const yes = AA.classify.booleanIntent(cls.key);
+      return { typed: "", match: yes ? /^yes\b/i : /^no\b/i };
+    }
+    const v = AA.classify.valueFor(cls.key, profile);
+    return v ? { text: v, typed: v } : null;
   }
 
   async function onEdit(result, newValue) {
@@ -285,7 +300,8 @@
     return "low";
   }
   function displayValue(f, cls, profile) {
-    if (cls.kind === "boolean") return AA.classify.valueFor(cls.key, profile);
+    if (cls.kind === "boolean") return AA.classify.booleanIntent(cls.key) ? "Yes" : "No";
+    if (cls.kind === "decline") return "Decline to answer";
     if (f.kind === "select" || f.kind === "radio" || f.kind === "checkbox") {
       return AA.classify.pickOption(cls, f.options.map((o) => o.raw), profile) || "";
     }
