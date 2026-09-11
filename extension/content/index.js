@@ -20,6 +20,31 @@
   let jobContext = null;
   let heldAnswers = [];
 
+  // Clicking "Apply Manually" or submitting Create Account can be a hard page
+  // navigation, which kills this script's execution mid-await — the content
+  // script re-injects fresh on the new page with no memory of being mid-chain.
+  // This flag (sessionStorage survives same-origin navigation) tells the fresh
+  // instance to keep going on its own instead of waiting for another click.
+  // Cleared once real per-step review starts (Ty reviews each step deliberately).
+  const AUTOCONTINUE_KEY = "__aa_wd_autocontinue__";
+  const AUTOCONTINUE_TTL_MS = 60000;
+  function setAutoContinue(on) {
+    try {
+      if (on) sessionStorage.setItem(AUTOCONTINUE_KEY, String(Date.now()));
+      else sessionStorage.removeItem(AUTOCONTINUE_KEY);
+    } catch {
+      /* sessionStorage unavailable — the chain just needs one extra click */
+    }
+  }
+  function autoContinuePending() {
+    try {
+      const t = +sessionStorage.getItem(AUTOCONTINUE_KEY);
+      return !!t && Date.now() - t < AUTOCONTINUE_TTL_MS;
+    } catch {
+      return false;
+    }
+  }
+
   const stepKey = () => {
     if (adapter.isJobPostingPage && safe(() => adapter.isJobPostingPage())) return "posting";
     if (adapter.isAuthScreen && safe(() => adapter.isAuthScreen())) return "auth";
@@ -40,6 +65,13 @@
     const onPosting = adapter.isJobPostingPage && safe(() => adapter.isJobPostingPage());
     const onAuth = !onPosting && adapter.isAuthScreen && safe(() => adapter.isAuthScreen());
     const onForm = !onPosting && !onAuth && safe(() => adapter.isApplicationForm());
+    if (!onPosting && (onAuth || onForm) && autoContinuePending()) {
+      launcherUp = true;
+      AA.tracker.mountLauncher(() => Promise.resolve(), "⚡ Continuing…");
+      AA.log("auto-continuing after a page hop —", onAuth ? "auth screen" : `step: ${sk}`);
+      run();
+      return;
+    }
     if (onPosting || onAuth || onForm) {
       launcherUp = true;
       const label = onPosting
@@ -78,10 +110,15 @@
   // ── Job posting → Apply → chooser (Workday only) ──────────────────────────
   async function runAutoStart() {
     AA.tracker.setStatus("Starting your application…");
+    setAutoContinue(true); // bridges the hard nav if "Apply Manually" leaves the page
     const res = await adapter.autoStartApply({ status: (m) => AA.tracker.setStatus(m) });
+    // If we're still here, autoStartApply finished without a page reload — an
+    // actual navigation would have killed this script mid-await, and the fresh
+    // instance on the new page picks up via autoContinuePending() instead.
     lastStepKey = null;
     stepDone = false;
     if (!res.ok) {
+      setAutoContinue(false);
       AA.tracker.setStatus("Couldn't start it automatically (" + (res.reason || "unknown") + ") — click Apply yourself, I'll take over from there.");
       return;
     }
@@ -94,6 +131,7 @@
   async function runAuth() {
     const creds = await AA.profile.workdayCreds();
     if (!creds) {
+      setAutoContinue(false);
       AA.tracker.render(
         { title: "Workday", phase: "auth", step: null, fields: [
           { label: "Workday sign-in", required: true, status: "empty-required", note: "Open the ApplyAi popup → Workday sign-in credentials" },
@@ -103,6 +141,7 @@
       return;
     }
     AA.tracker.setStatus("Signing in to Workday…");
+    setAutoContinue(true); // Create Account's submit can also hard-navigate
     const res = await adapter.authenticate(creds, {
       status: (m) => AA.tracker.setStatus(m),
       onVerify: () =>
@@ -123,12 +162,14 @@
       }
       lastStepKey = null;
     } else {
+      setAutoContinue(false);
       AA.tracker.setStatus("Sign-in failed: " + (res.reason || "unknown") + " — do it manually, I'll take over from the form.");
     }
   }
 
   // ── Fill one step, build the tracker report ──────────────────────────────
   async function runStep() {
+    setAutoContinue(false); // from here on, "Next step →" is a deliberate per-step click
     const profile = await AA.profile.get();
     const resumeBlob = await AA.profile.resume();
     jobContext = safe(() => adapter.detectJobContext()) || {};
