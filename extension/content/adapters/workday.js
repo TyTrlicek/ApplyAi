@@ -77,6 +77,39 @@
       );
     },
 
+    // ── Job posting → "Apply" → chooser → auth (mirrors Jobright: one click
+    // from the posting page runs the whole chain) ─────────────────────────────
+
+    isJobPostingPage() {
+      return !!daq("adventureButton") && !this.isAuthScreen() && !this._onStepForm();
+    },
+
+    // hooks.status(msg). Clicks Apply, waits for Workday's "Start Your
+    // Application" chooser (or a direct landing on auth/the form — some tenants
+    // skip the chooser), picks "Apply Manually" when present.
+    async autoStartApply(hooks = {}) {
+      const status = hooks.status || (() => {});
+      const applyBtn = daq("adventureButton");
+      if (!applyBtn) return { ok: false, reason: "no Apply button found on this posting" };
+
+      status("Clicking Apply…");
+      AA.fill.realClick(applyBtn);
+
+      const reachedChooserOrPast = await AA.waitFor(
+        () => daq("applyManually") || daq("autofillWithResume") || daq("useMyLastApplication") || this.isAuthScreen() || this._onStepForm(),
+        { timeout: 9000, interval: 300 }
+      );
+      if (!reachedChooserOrPast) return { ok: false, reason: "Apply click didn't lead anywhere" };
+
+      const manualBtn = daq("applyManually");
+      if (manualBtn) {
+        status("Choosing Apply Manually…");
+        AA.fill.realClick(manualBtn);
+        await AA.waitFor(() => this.isAuthScreen() || this._onStepForm(), { timeout: 9000 });
+      }
+      return { ok: this.isAuthScreen() || this._onStepForm(), reason: "chooser didn't resolve" };
+    },
+
     isAuthScreen() {
       if (this._onStepForm()) return false;
       // Either the email/password form, or the first "Sign in with …" chooser

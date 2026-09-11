@@ -21,6 +21,7 @@
   let heldAnswers = [];
 
   const stepKey = () => {
+    if (adapter.isJobPostingPage && safe(() => adapter.isJobPostingPage())) return "posting";
     if (adapter.isAuthScreen && safe(() => adapter.isAuthScreen())) return "auth";
     if (!adapter.isMultiStep) return "single";
     return safe(() => (adapter.stepName ? adapter.stepName() : location.pathname)) || location.pathname;
@@ -36,17 +37,20 @@
     }
     if (launcherUp || stepDone) return;
 
-    const onAuth = adapter.isAuthScreen && safe(() => adapter.isAuthScreen());
-    const onForm = safe(() => adapter.isApplicationForm());
-    if (onAuth || onForm) {
+    const onPosting = adapter.isJobPostingPage && safe(() => adapter.isJobPostingPage());
+    const onAuth = !onPosting && adapter.isAuthScreen && safe(() => adapter.isAuthScreen());
+    const onForm = !onPosting && !onAuth && safe(() => adapter.isApplicationForm());
+    if (onPosting || onAuth || onForm) {
       launcherUp = true;
-      const label = onAuth
+      const label = onPosting
+        ? "⚡ Apply & autofill (ApplyAi)"
+        : onAuth
         ? "⚡ Sign in & autofill (ApplyAi)"
         : adapter.isMultiStep
         ? "⚡ Autofill this step"
         : "⚡ Autofill with ApplyAi";
       AA.tracker.mountLauncher(run, label);
-      AA.log("mounted launcher —", onAuth ? "auth screen" : `step: ${sk}`);
+      AA.log("mounted launcher —", onPosting ? "job posting" : onAuth ? "auth screen" : `step: ${sk}`);
     }
   };
 
@@ -59,7 +63,9 @@
   async function run() {
     busy = true;
     try {
-      if (adapter.isAuthScreen && safe(() => adapter.isAuthScreen())) {
+      if (adapter.isJobPostingPage && safe(() => adapter.isJobPostingPage())) {
+        await runAutoStart();
+      } else if (adapter.isAuthScreen && safe(() => adapter.isAuthScreen())) {
         await runAuth();
       } else {
         await runStep();
@@ -67,6 +73,21 @@
     } finally {
       busy = false;
     }
+  }
+
+  // ── Job posting → Apply → chooser (Workday only) ──────────────────────────
+  async function runAutoStart() {
+    AA.tracker.setStatus("Starting your application…");
+    const res = await adapter.autoStartApply({ status: (m) => AA.tracker.setStatus(m) });
+    lastStepKey = null;
+    stepDone = false;
+    if (!res.ok) {
+      AA.tracker.setStatus("Couldn't start it automatically (" + (res.reason || "unknown") + ") — click Apply yourself, I'll take over from there.");
+      return;
+    }
+    await AA.sleep(400);
+    if (safe(() => adapter.isAuthScreen())) return runAuth();
+    if (safe(() => adapter.isApplicationForm())) return runStep();
   }
 
   // ── Workday sign-in / account creation ────────────────────────────────────
