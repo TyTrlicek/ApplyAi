@@ -19,12 +19,34 @@ Driven through Ty's Chrome (real extension, real credentials from the popup) on
 | `authenticate()` loop | ❌ timed out after 12 s → "Sign-in failed" |
 | Email verification / steps 2–7 | ⬜ never reached |
 
-**Root cause of the submit failure:** bare `submitBtn.click()`. Workday's submit
-button — like its react-select dropdowns — ignores a lone synthetic click and
-needs the full `pointerdown → mousedown → pointerup → mouseup → click` sequence.
-Same lesson we already learned for Greenhouse dropdowns, not yet applied here.
-**Fixed this session** (`fillAuth` now uses `AA.fill.realClick`, `authenticate`
-retries up to 2×).
+**Root cause of the submit failure, take 1:** bare `submitBtn.click()`. Fixed
+with `realClick` (the same pointer-event sequence that unlocked react-select) —
+but on re-test, **`realClick` also silently no-op'd on Create Account.**
+
+**Root cause, confirmed (2026-09-10):** it's not about event realism at all.
+Clicking the button myself with a genuine OS-level click (`computer` tool)
+worked instantly — landed straight on "My Information." Every JS-dispatched
+click, however carefully constructed, does not. This points at
+`event.isTrusted`: real input events have it `true`, anything `dispatchEvent`s
+has it `false`, and it's a plain readable boolean, so a click handler can
+simply ignore untrusted events — a standard credential/bot-abuse guard on an
+account-creation endpoint. **No content script can click through this**,
+ours or anyone else's. Corroborated by Jobright: watched it live fill the
+Create Account form to **100%** and then stop, presenting its *own* "Create
+Account ▶" button rather than auto-clicking Workday's — the same wall, worked
+around the same way.
+
+**Fix:** stop trying to click Create Account / Sign In at all. `authenticate()`
+now fills every field and returns `needsManualClick`; the tracker shows
+*"everything's filled — click Create Account yourself"* and leaves the
+auto-continue flag armed, so the moment that real click happens and the page
+moves to "My Information," the next script instance picks the chain back up
+with zero extra clicks needed on the user's part beyond that one.
+
+**Open question for later testing:** does the same `isTrusted` wall apply to
+the *final* "Submit Application" button, or just auth endpoints? If it does,
+that's a free safety net on top of the deliberate stop-before-submit design —
+worth confirming once a run reaches the Review step.
 
 ---
 

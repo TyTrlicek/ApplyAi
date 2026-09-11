@@ -149,6 +149,30 @@
           AA.tracker.verifyPrompt((code) => resolve(code));
         }),
     });
+    if (res.needsManualClick) {
+      // Workday's account-creation/sign-in submit only responds to a genuine
+      // click (event.isTrusted) — no synthetic dispatch gets through, confirmed
+      // live. Fill is done; leave autoContinue set so the moment the button is
+      // clicked for real and the page moves on, the fresh script picks it up.
+      const label = res.mode === "create" ? "Create Account" : "Sign In";
+      AA.tracker.render(
+        {
+          title: "Workday",
+          phase: "auth",
+          step: null,
+          fields: [
+            {
+              label,
+              required: true,
+              status: "empty-required",
+              note: `Everything's filled — click "${label}" on the page yourself, I'll continue automatically from there.`,
+            },
+          ],
+        },
+        {}
+      );
+      return;
+    }
     if (res.ok) {
       AA.tracker.setStatus("Signed in — filling the application…");
       // Wait for the first step to render, then fill it automatically.

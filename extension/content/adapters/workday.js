@@ -123,13 +123,23 @@
     },
 
     // hooks.onVerify() -> Promise<string> (the emailed code); hooks.status(msg)
+    //
+    // IMPORTANT: Workday's Create Account / Sign In submit button only responds
+    // to a genuine, browser-trusted click (event.isTrusted) — confirmed live: a
+    // realClick() pointer-event sequence (identical to the one that works on
+    // react-select) silently no-ops here every time, while a real click succeeds
+    // instantly. This isn't fixable from content-script JS. Jobright hits the
+    // same wall — its own panel fills to 100% and then waits for a real click on
+    // its own "Create Account" button rather than firing one itself. So: fill
+    // everything, then hand off for one manual click; index.js's auto-continue
+    // (sessionStorage flag) picks the chain back up once the page moves on.
     async authenticate(creds, hooks = {}) {
       const status = hooks.status || (() => {});
       if (!creds || !creds.email || !creds.password) {
         return { ok: false, reason: "no Workday credentials set — open the ApplyAi popup" };
       }
 
-      status("Creating your Workday account…");
+      status("Filling your Workday account details…");
 
       // Step A: the "Sign in with Google / email / LinkedIn" chooser — take the
       // email path to reveal the actual fields.
@@ -151,55 +161,26 @@
       }
 
       const mode = document.querySelectorAll('input[type="password"]').length >= 2 ? "create" : "signin";
-      let submitBtn = await fillAuth(creds, mode);
-      let resubmits = 0;
+      await fillAuth(creds, mode);
 
-      // Outcomes: verification screen / "already exists" / straight into the form.
-      for (let i = 0; i < 30; i++) {
-        await AA.sleep(500);
-        if (this.isApplicationForm()) return { ok: true };
-
-        const bodyText = document.body.innerText.slice(0, 3000);
-
-        // Still on the same auth form after the click — retry the submit (React
-        // sometimes drops the first synthetic press) up to twice.
-        if (
-          submitBtn &&
-          submitBtn.isConnected &&
-          document.querySelector('input[type="password"]') &&
-          resubmits < 2 &&
-          i > 2 &&
-          i % 4 === 0
-        ) {
-          resubmits++;
-          status("Submitting…");
-          AA.fill.realClick(submitBtn);
-          continue;
-        }
-
-        if (/already (exists|in use|registered|an account)/i.test(bodyText) || /account.*already/i.test(bodyText)) {
-          status("That account already exists — signing in…");
-          (daq("signInLink") || btnByText(/^sign in$/i) || btnByText(/back to sign in/i))?.click();
-          await AA.sleep(1000);
-          await fillAuth(creds, "signin");
-          await AA.sleep(1500);
-          continue;
-        }
-
-        const codeField = document.querySelector(
-          'input[data-automation-id*="erificat" i],input[data-automation-id*="code" i],input[autocomplete="one-time-code"]'
-        );
-        if (codeField && hooks.onVerify && !codeField.dataset.aaTried) {
-          codeField.dataset.aaTried = "1";
-          status("Enter the code Workday emailed you.");
-          const code = await hooks.onVerify();
-          el_set(codeField, code);
-          (btnByText(/verify|submit|continue/i))?.click();
-          await AA.sleep(1800);
-          continue;
-        }
+      // Handle an email-verification code if one's already showing (rare at
+      // this point, but some tenants ask before the account fully exists).
+      const codeField = document.querySelector(
+        'input[data-automation-id*="erificat" i],input[data-automation-id*="code" i],input[autocomplete="one-time-code"]'
+      );
+      if (codeField && hooks.onVerify) {
+        status("Enter the code Workday emailed you.");
+        const code = await hooks.onVerify();
+        el_set(codeField, code);
+        return { ok: false, needsManualClick: true, mode, reason: "code entered — click Verify/Continue yourself" };
       }
-      return { ok: this.isApplicationForm(), reason: "sign-in didn't reach the application form" };
+
+      return {
+        ok: false,
+        needsManualClick: true,
+        mode,
+        reason: `everything's filled — click ${mode === "create" ? "Create Account" : "Sign In"} yourself`,
+      };
     },
 
     detectJobContext() {
@@ -366,6 +347,8 @@
     el.tabIndex === -1;
 
   // mode: "create" (email + password + verify + agree) or "signin" (email + password)
+  // Fills email/password(+verify)/agreement only. Never touches the submit
+  // button — see the note on authenticate() for why.
   async function fillAuth(creds, mode) {
     const emailEl =
       document.querySelector('input[data-automation-id="email"]') ||
@@ -386,17 +369,6 @@
         await AA.sleep(150);
       }
     }
-
-    const submit =
-      document.querySelector('[data-automation-id="createAccountSubmitButton"],[data-automation-id="signInSubmitButton"]') ||
-      btnByText(mode === "create" ? /^create account$/i : /^sign in$/i) ||
-      btnByText(/^(create account|sign in)$/i);
-    if (!submit) return null;
-    // Workday's submit button, like its react-select, ignores a bare .click() —
-    // use the full pointer sequence.
-    AA.fill.realClick(submit);
-    await AA.sleep(1600);
-    return submit;
   }
 
   function wdLabel(el, wrap) {
